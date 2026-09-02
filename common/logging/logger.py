@@ -17,7 +17,7 @@ import os
 from dotenv import load_dotenv
 from loguru import logger
 
-from path_util import PROJECT_ROOT
+# from path_util import PROJECT_ROOT
 
 # -------------------------- 第一步：加载.env配置文件 --------------------------
 load_dotenv()
@@ -30,7 +30,8 @@ LOG_FILE_LEVEL = os.getenv("LOG_FILE_LEVEL", "INFO").upper()
 LOG_FILE_RETENTION = os.getenv("LOG_FILE_RETENTION", "7 days")
 
 # -------------------------- 第三步：定义日志路径（自动推导项目根） --------------------------
-LOG_DIR = PROJECT_ROOT / "logs"
+# LOG_DIR = PROJECT_ROOT / "logs"
+LOG_DIR = Path(r"D:\Python project\Shopkeeper_Brain\logslogs")
 LOG_FILE_NAME = "app_{time:YYYYMMDD}.log"
 LOG_FILE_PATH = LOG_DIR / LOG_FILE_NAME
 
