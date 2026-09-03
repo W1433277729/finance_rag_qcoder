@@ -1,7 +1,7 @@
 from pymilvus import MilvusClient, AnnSearchRequest, WeightedRanker
 
-from common.config.milvus_config import milvus_config
-from common.logging.logger import logger            # 项目统一日志工具
+from src.common.config.milvus_config import milvus_config
+from src.common.logging.logger import logger            # 项目统一日志工具
 # 全局Milvus客户端实例，实现单例复用
 _milvus_client = None
 

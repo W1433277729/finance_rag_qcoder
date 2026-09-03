@@ -1,5 +1,5 @@
-from utils.path_util import PROJECT_ROOT
-from common.logging.logger import logger  # 可选，加日志更友好
+from src.utils.path_util import PROJECT_ROOT
+from src.common.logging.logger import logger  # 可选，加日志更友好
 
 def load_prompt(name: str, **kwargs) -> str:
     """

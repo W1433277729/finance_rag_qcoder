@@ -7,7 +7,7 @@
 """
 import copy
 from typing import TypedDict
-from common.logging.logger import logger
+from src.common.logging.logger import logger
 
 
 class ImportGraphState(TypedDict):

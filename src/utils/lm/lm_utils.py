@@ -1,13 +1,11 @@
 # 环境配置与依赖导入
-import os
-from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.exceptions import LangChainException
 from typing import Optional
 
 # 项目内部依赖
-from common.config.lm_config import lm_config
-from common.logging.logger import logger
+from src.common.config.lm_config import lm_config
+from src.common.logging.logger import logger
 
 # 全局缓存：键为(模型名, JSON输出模式)元组，值为ChatOpenAI实例
 # 作用：避免重复初始化客户端，提升性能，统一实例管理

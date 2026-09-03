@@ -4,7 +4,7 @@
 import time
 from collections import deque
 from typing import Deque
-from common.logging.logger import logger  # 复用项目全局logger
+from src.common.logging.logger import logger  # 复用项目全局logger
 
 _GLOBAL_REQUEST_TIMES: Deque[float] = deque()
 

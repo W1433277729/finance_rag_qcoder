@@ -6,11 +6,11 @@
 import json
 
 from dotenv import load_dotenv
-from common.logging.logger import logger
+from src.common.logging.logger import logger
 from langgraph.graph import END, StateGraph
-from processor.import_processor.nodes import node_entry, node_pdf_to_md, node_md_img, node_document_split, \
+from src.processor.import_processor.nodes import node_entry, node_pdf_to_md, node_md_img, node_document_split, \
     node_bge_embedding, node_import_milvus, node_item_name_recognition
-from processor.import_processor.state import create_default_state, get_default_state, ImportGraphState
+from src.processor.import_processor.state import create_default_state, ImportGraphState
 
 # 初始化环境变量：必须配置在读取前操作，确保后续节点能获取到环境变量中的信息
 load_dotenv()

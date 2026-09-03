@@ -1,5 +1,5 @@
 from FlagEmbedding import FlagReranker
-from common.config.reranker_config import reranker_config
+from src.common.config.reranker_config import reranker_config
 
 _reranker_model = None
 
