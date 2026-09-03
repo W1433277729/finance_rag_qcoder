@@ -37,7 +37,7 @@ Shopkeeper_Brain/
   - 整体框架已经搭好，具体节点实现逻辑还没有填充
 
 ## 测试生成硬性规则（AI 必须遵守）
-1. **文件命名**：测试文件必须放在 `tests/` 下，命名为 `test_<对应模块名>.py`。
+1. **文件命名**：测试文件必须放在 `tests/` 下，与原模块的路径保持一致，命名为 `test_<对应模块名>.py`，例如`src/aaa.py`，`test/src/test_aaa.py`,
 2. **函数命名**：测试函数以 `test_` 开头，命名格式 `test_<被测函数>_<测试场景>`（例如 `test_divide_by_zero`）。
 3. **多组数据**：必须使用 `@pytest.mark.parametrize`，禁止写重复的测试函数。
 4. **异常测试**：使用 `with pytest.raises(异常类型, match="错误信息")`。
