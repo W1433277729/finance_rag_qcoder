@@ -19,8 +19,8 @@ class ImportGraphState(TypedDict):
     is_pdf_read_enabled: bool
 
     # 路径相关
-    local_dir: str  # 文件夹地址 （pdf/md 输出的文件夹地址）
-    local_file_path: str  # 传入文件的地址，不确定pdf、md
+    output_file_dir: str  # 文件夹地址 （pdf/md 输出的文件夹地址）
+    input_file_path: str  # 传入文件的地址，不确定pdf、md
     file_title: str  # 文件名
     pdf_path: str  # pdf 地址，pdf文件的地址保存，local_file_path -> pdf_path
     md_path: str  # md 地址，md文件的地址保存, local_file_path -> md_path
@@ -39,8 +39,8 @@ graph_default_state: ImportGraphState = {
     "task_id": "",
     "is_pdf_read_enabled": False,
     "is_md_read_enabled": False,
-    "local_dir": "",
-    "local_file_path": "",
+    "output_file_dir": "",
+    "input_file_path": "",
     "pdf_path": "",
     "md_path": "",
     "file_title": "",
@@ -72,5 +72,5 @@ if __name__ == '__main__':
     测试
     """
     # 创建默认状态
-    state = create_default_state(local_file_path="万用表RS-12的使用.pdf")
+    state = create_default_state(input_file_path="万用表RS-12的使用.pdf")
     logger.info(state)
