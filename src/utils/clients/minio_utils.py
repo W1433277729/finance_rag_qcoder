@@ -13,7 +13,7 @@ _minio_client = None
 # 登录 准备(创建桶和设置权限) 并且返回一个minio的引用可以使用他 上传和删除文件
 def _create_minio_client():
     client = Minio(
-        minio_config.endpoint,
+        endpoint=minio_config.endpoint,
         access_key=minio_config.access_key,
         secret_key=minio_config.secret_key,
         secure=minio_config.minio_secure  # https True  http False
