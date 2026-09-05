@@ -1,4 +1,5 @@
 # 环境配置与依赖导入
+from langchain.chat_models import init_chat_model
 from langchain_openai import ChatOpenAI
 from langchain_core.exceptions import LangChainException
 from typing import Optional
@@ -53,8 +54,9 @@ def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> Chat
 
     # 5. 客户端初始化：捕获LangChain封装层异常，抛出更友好的提示
     try:
-        llm_client = ChatOpenAI(
+        llm_client = init_chat_model(
             model=target_model,  # 目标模型名
+            model_provider='openai',
             temperature=lm_config.llm_temperature or 0.1,  # 低温度保证输出确定性（0~1）
             api_key=lm_config.api_key,  # API密钥
             base_url=lm_config.base_url,  # API基础地址（适配国产模型代理地址）

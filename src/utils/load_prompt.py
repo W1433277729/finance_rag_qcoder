@@ -1,6 +1,7 @@
 from src.utils.path_util import PROJECT_ROOT
 from src.common.logging.logger import logger  # 可选，加日志更友好
 
+
 def load_prompt(name: str, **kwargs) -> str:
     """
     加载提示词并渲染变量占位符
@@ -9,7 +10,7 @@ def load_prompt(name: str, **kwargs) -> str:
     :return: 渲染后的最终提示词字符串
     """
     # 1. 拼接提示词路径（你的原有逻辑，完全保留）
-    prompt_path = PROJECT_ROOT / 'common' / 'prompt' / f'{name}.prompt'
+    prompt_path = PROJECT_ROOT / 'src' / 'common' / 'prompt' / f'{name}.prompt'
 
     # 2. 校验文件是否存在（可选，避免文件不存在直接报错）
     if not prompt_path.exists():

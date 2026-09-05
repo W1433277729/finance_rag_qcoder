@@ -8,6 +8,7 @@ from src.common.logging.logger import logger  # 复用项目全局logger
 
 _GLOBAL_REQUEST_TIMES: Deque[float] = deque()
 
+
 # 滑动窗口限速器 核心: 窗口时间内,超出了数量,等待(sleep)
 def apply_api_rate_limit(
         max_requests: int = 3000,
@@ -22,17 +23,16 @@ def apply_api_rate_limit(
     """
     current_time = time.time()
 
-
     # 1. 清理滑动窗口外的过期请求时间戳，保证队列仅存窗口内的请求
-    # notice 本次进来,先清空超过了时间窗口的记录!
+    # ⚠️重点： 本次进来,先清空超过了时间窗口的记录!
     while _GLOBAL_REQUEST_TIMES and current_time - _GLOBAL_REQUEST_TIMES[0] >= window_seconds:
         _GLOBAL_REQUEST_TIMES.popleft()
 
-    # notice _GLOBAL_REQUEST_TIMES 本次节点同一个窗口的记录
+    # ⚠️重点： _GLOBAL_REQUEST_TIMES 本次节点同一个窗口的记录
     # 2. 窗口内请求数达上限，计算并阻塞等待剩余时间
     if len(_GLOBAL_REQUEST_TIMES) >= max_requests:
         # 计算需要等待的时长（窗口总时长 - 最早请求已存在的时长）
-        # notice 同一个时间窗口,超出了最大的访问限制! sleep
+        # ⚠️重点： 同一个时间窗口,超出了最大的访问限制! sleep
         sleep_duration = window_seconds - (current_time - _GLOBAL_REQUEST_TIMES[0])
         if sleep_duration > 0:
             logger.debug(f"触发API速率限制，窗口{window_seconds}秒内最多{max_requests}次，需等待：{sleep_duration:.2f} 秒")
