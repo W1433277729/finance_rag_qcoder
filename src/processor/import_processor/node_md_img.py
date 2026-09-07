@@ -138,7 +138,7 @@ def step_3_image_summary(images_info_list: list[Tuple[str, str, Tuple[str, str]]
 
 
 @step_log("step_4_upload_images_get_url")
-def step_4_upload_images_get_url(images_info_list: list[Tuple[str, str, Tuple[str, str]]], stem: str):
+def step_4_upload_images_get_url(images_info_list: list[Tuple[str, str, Tuple[str, str]]], stem: str) -> dict[str, str]:
     """
     上传文件，并获取文件的访问url
     :param images_info_list:
@@ -149,8 +149,7 @@ def step_4_upload_images_get_url(images_info_list: list[Tuple[str, str, Tuple[st
     # 如果存在旧文件，先执行删除操作
     objects_list = minio_client.list_objects(
         bucket_name=minio_config.bucket_name,
-        # 去除开头 /
-        prefix=minio_config.minio_img_dir[1:] + '/' + stem,
+        prefix=minio_config.minio_img_dir + '/' + stem,
         recursive=True
     )
     delete_object_list = [DeleteObject(obj.object_name) for obj in objects_list]
@@ -159,6 +158,7 @@ def step_4_upload_images_get_url(images_info_list: list[Tuple[str, str, Tuple[st
         bucket_name=minio_config.bucket_name,
         delete_object_list=delete_object_list
     )
+    # errors 是一个迭代器，懒执行，遍历后才会真正执行删除操作
     for error in errors:
         logger.warning(f"删除图片出现问题:{error}")
     # 重新上传本次对应的文件
@@ -171,11 +171,44 @@ def step_4_upload_images_get_url(images_info_list: list[Tuple[str, str, Tuple[st
                 file_path=image_path,
                 content_type=guess_type(image_name)[0]
             )
-            url = f'http://{minio_config.endpoint}/{minio_config.bucket_name}{minio_config.minio_img_dir}/{stem}/{image_name}'
+            url = f'http://{minio_config.endpoint}/{minio_config.bucket_name}/{minio_config.minio_img_dir}/{stem}/{image_name}'
             image_url_dict[image_name] = url
             logger.info(f"{image_name}已经完成上传,对应的地址为:{url}")
         except Exception:
             logger.warning(f"{image_name}上传失败,跳过,继续下一张图片传递!!")
+    return image_url_dict
+
+@step_log("step_5_md_content_image_replace")
+def step_5_md_content_image_replace(md_content, summary_img_dict:dict, image_url_dict:dict) -> str:
+    """
+    完成md_content的内的图片替换
+    :param md_content: 原md的内容
+    :param summary_img_dict: 图片和对应的描述
+    :param image_url_dict: 图片和对应的地址
+    :return: 替换后的md_content内容
+    """
+    for image_name, image_summary in summary_img_dict.items():
+        image_url = image_url_dict.get(image_name)
+        # 定义匹配正则
+        reg = re.compile(r"\!\[.*?\]\(.*?" + re.escape(image_name) + r".*?\)")
+        # 使用 sub 进行替换
+        md_content = reg.sub(lambda _:f"![{image_summary}]({image_url})", md_content)
+        logger.debug(f"已经完成:{image_name}图片的替换,替换入的描述:{image_summary},替换的地址:{image_url}")
+    return md_content
+
+@step_log("step_6_md_content_image_replace")
+def step_6_backup_new_md_content(md_content_new, md_path_obj:Path) -> str:
+    """
+    完成新的md_content备份
+    备份的命名: 烫金机的使用手册.md -> 烫金机的使用手册_new.md -> state md_path
+    :param md_content_new: 新内容
+    :param md_path_obj: 原文件对象
+    :return: 新文件的地址
+    """
+    md_path_new = md_path_obj.with_name(f'{md_path_obj.stem}_new.md')
+    md_path_new.write_text(md_content_new, encoding='utf-8')
+    logger.info(f"已经将新的md_content内容备份到:{str(md_path_new)}")
+    return str(md_path_new)
 
 
 @node_log('node_md_img')
@@ -200,7 +233,17 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
     summary_img_dict = step_3_image_summary(images_info_list, md_path_obj.stem)
 
     # =================== step4 将图片信息传到MinIO服务器 ==========================
-    step_4_upload_images_get_url(images_info_list, md_path_obj.stem)
+    image_url_dict = step_4_upload_images_get_url(images_info_list, md_path_obj.stem)
+
+    # =================== step4 替换md图片内容 ==========================
+    md_content_new: str = step_5_md_content_image_replace(md_content, summary_img_dict, image_url_dict)
+
+    # =================== step5 把替换后的md_content 持久化 ======================
+    md_path_obj_new: str = step_6_backup_new_md_content(md_content_new, md_path_obj)
+
+    # 更新状态
+    state['md_path'] = md_path_obj_new
+    state['md_content'] = md_content_new
 
     add_done_task(state.get('task_id'), "node_md_img")
     return state
