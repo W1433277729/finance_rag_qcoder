@@ -17,12 +17,13 @@ def get_milvus_client():
         # 单例判断：未初始化则创建新连接
         if _milvus_client is None:
             milvus_uri = milvus_config.milvus_url
+            database = milvus_config.database
             # 校验Milvus连接地址配置
             if not milvus_uri:
                 logger.error("Milvus客户端连接失败：缺少MILVUS_URL环境变量配置")
                 return None
             # 初始化Milvus客户端
-            _milvus_client = MilvusClient(uri=milvus_uri)
+            _milvus_client = MilvusClient(uri=milvus_uri, db_name=database)
             logger.info("Milvus客户端连接成功")
         return _milvus_client
     except Exception as e:
