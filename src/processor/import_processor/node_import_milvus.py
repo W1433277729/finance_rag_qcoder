@@ -94,8 +94,6 @@ def step_2_prepared_item_name_collection():
 
 
 step_log("step_3_insert_item_name_data")
-
-
 def step_3_insert_item_name_data(embeddings_content: list[dict]):
     """
     插入数据

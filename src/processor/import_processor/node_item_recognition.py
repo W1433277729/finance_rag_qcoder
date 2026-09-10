@@ -103,6 +103,14 @@ def step_3_padding_item_name_to_chunks(chunks: list[dict[str, Any]], item_name):
 @step_log("step_4_prepared_item_name_collection")
 def step_4_prepared_item_name_collection():
     milvus_client = milvus_utils.get_milvus_client()
+    # 检查是否存在集合
+    has_collection = milvus_client.has_collection(collection_name=milvus_config.item_name_collection)
+    if has_collection:
+        logger.info(f"{milvus_config.item_name_collection}已经存在,可以直接使用!")
+        return
+    logger.info(f"{milvus_config.item_name_collection}不存在,进行集合的创建!")
+    # 1.创建schema
+
     # 创建 schema
     schema = milvus_client.create_schema(auto_id=True, enable_dynamic_field=False, )
     schema.add_field(field_name='pk', datatype=DataType.INT64, is_primary=True)
@@ -145,13 +153,21 @@ def step_5_insert_item_name_data(item_name, file_title):
     # result = {"dense":[[]],"sparse":[{}]}
     dense_vector = embedding['dense'][0]
     sparse_vector = embedding['sparse'][0]
+
+    milvus_client: MilvusClient = milvus_utils.get_milvus_client()
+    # 先删除数据
+    # 文档 -> 集合 -> 先删除旧的数据 -> file_title | item_name
+    milvus_client.delete(
+        collection_name=milvus_config.item_name_collection,
+        filter=f"file_title == '{file_title}'"  # mysql where  坑1: milvus的等于 ==  坑2: 会值变成列名
+    )
     data = {
         'item_name': item_name,
         'file_title': file_title,
         'dense_vector': dense_vector,
         'sparse_vector': sparse_vector
     }
-    milvus_client: MilvusClient = milvus_utils.get_milvus_client()
+
     res = milvus_client.insert(collection_name=COLLECTION_NAME, data=data)
     logger.info(f'插入成功, {res}')
 
