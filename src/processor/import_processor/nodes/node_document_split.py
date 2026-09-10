@@ -308,7 +308,6 @@ if __name__ == '__main__':
 
     """本地测试入口：单独运行该文件时，执行MD图片处理全流程测试"""
     from utils.path_util import PROJECT_ROOT
-    from processor.import_processor.node_md_img import node_md_img
 
     logger.info(f"本地测试 - 项目根目录：{PROJECT_ROOT}")
 
