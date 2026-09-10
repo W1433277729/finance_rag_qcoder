@@ -108,7 +108,7 @@ def step_4_prepared_item_name_collection():
     schema.add_field(field_name='pk', datatype=DataType.INT64, is_primary=True)
     schema.add_field(field_name='file_title', datatype=DataType.VARCHAR, max_length=256)
     schema.add_field(field_name='item_name', datatype=DataType.VARCHAR, max_length=256)
-    schema.add_field(field_name='dense_vector', datatype=DataType.FLOAT_VECTOR, dim=768)
+    schema.add_field(field_name='dense_vector', datatype=DataType.FLOAT_VECTOR, dim=1024)
     schema.add_field(field_name='sparse_vector', datatype=DataType.SPARSE_FLOAT_VECTOR)
     # 设置索引参数
     index_params = milvus_client.prepare_index_params()
