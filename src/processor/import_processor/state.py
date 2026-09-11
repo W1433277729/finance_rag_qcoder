@@ -22,8 +22,8 @@ class ImportGraphState(TypedDict):
     output_file_dir: str  # 文件夹地址 （pdf/md 输出的文件夹地址）
     input_file_path: str  # 传入文件的地址，不确定pdf、md
     file_title: str  # 文件名
-    pdf_path: str  # pdf 地址，pdf文件的地址保存，local_file_path -> pdf_path
-    md_path: str  # md 地址，md文件的地址保存, local_file_path -> md_path
+    pdf_path: str  # pdf 地址，pdf文件的地址保存，input_file_path -> pdf_path
+    md_path: str  # md 地址，md文件的地址保存, input_file_path -> md_path
 
     # 内容相关
     md_content: str
@@ -60,12 +60,14 @@ def create_default_state(**overrides) -> ImportGraphState:
     state.update(overrides)
     return state
 
+
 def get_default_state() -> ImportGraphState:
     """
     返回一个新的状态实例，避免全局变量污染
     :return:
     """
     return copy.deepcopy(graph_default_state)
+
 
 if __name__ == '__main__':
     """
