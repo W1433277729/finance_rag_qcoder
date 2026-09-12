@@ -11,7 +11,7 @@ from typing import Tuple, Any
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from common.logging.logger import step_log
+from src.common.logging.logger import step_log
 from src.common.logging.logger import node_log, logger
 from src.utils.task_utils import add_running_task, add_done_task
 from src.processor.import_processor.state import ImportGraphState
@@ -306,7 +306,7 @@ if __name__ == '__main__':
     """
 
     """本地测试入口：单独运行该文件时，执行MD图片处理全流程测试"""
-    from utils.path_util import PROJECT_ROOT
+    from src.utils.path_util import PROJECT_ROOT
 
     logger.info(f"本地测试 - 项目根目录：{PROJECT_ROOT}")
 

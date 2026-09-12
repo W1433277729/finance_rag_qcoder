@@ -15,7 +15,7 @@ import inspect
 import os
 from dotenv import load_dotenv
 from loguru import logger
-from utils.path_util import PROJECT_ROOT
+from src.utils.path_util import PROJECT_ROOT
 
 # -------------------------- 第一步：加载.env配置文件 --------------------------
 load_dotenv()

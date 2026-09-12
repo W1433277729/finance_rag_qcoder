@@ -313,37 +313,57 @@
         }
     }
 
+    // 拉取一次任务状态，顺便把日志渲染出来，返回后端的最新数据
+    async function fetchStatusAndRender(taskId, itemEl) {
+        const res = await fetch(`${API_BASE}/status/${taskId}`);
+        const data = await res.json();
+        renderLogs(itemEl, data.done_list, data.running_list);
+        return data;
+    }
+
+    // 根据状态刷新徽章/进度条；返回 true 表示已进入终态，可以停止轮询
+    function applyStatus(data, statusBadge, progressBar) {
+        if (data.status === 'completed') {
+            statusBadge.textContent = '已完成';
+            statusBadge.className = 'status-badge status-completed';
+            updateProgressBar(progressBar, 100);
+            return true;
+        }
+        if (data.status === 'failed') {
+            statusBadge.textContent = '失败';
+            statusBadge.className = 'status-badge status-error';
+            return true;
+        }
+        if (data.status === 'processing') {
+            statusBadge.textContent = '处理中...';
+            updateProgressBar(progressBar, 30);
+            return false;
+        }
+        // pending 或后台任务尚未开始：继续等待
+        statusBadge.textContent = '排队中...';
+        return false;
+    }
+
     function pollStatus(taskId, itemEl) {
         const statusBadge = itemEl.querySelector('.status-badge');
         const progressBar = itemEl.querySelector('.progress-bar');
-        
+
         const interval = setInterval(async () => {
             try {
-                const res = await fetch(`${API_BASE}/status/${taskId}`);
-                const data = await res.json();
+                let data = await fetchStatusAndRender(taskId, itemEl);
 
-                // 渲染日志（done/running）
-                renderLogs(itemEl, data.done_list, data.running_list);
-                
-                if (data.status === 'completed') {
-                    statusBadge.textContent = '已完成';
-                    statusBadge.className = 'status-badge status-completed';
-                    updateProgressBar(progressBar, 100);
+                if (applyStatus(data, statusBadge, progressBar)) {
+                    // 终态收尾：先停止轮询，再补拉一次最新状态。
+                    // 后端是「先写 done_list，再改 status」，两步之间存在极短的竞态窗口，
+                    // 补拉这一次能保证最后写入的日志不会被漏掉。
                     clearInterval(interval);
-                } else if (data.status === 'processing') {
-                    // 保持处理中状态
-                    statusBadge.textContent = '处理中...';
-                    // 确保进度为30%
-                     updateProgressBar(progressBar, 30);
-                } else if (data.status === 'failed') {
-                    statusBadge.textContent = '失败';
-                    statusBadge.className = 'status-badge status-error';
-                    clearInterval(interval);
+                    data = await fetchStatusAndRender(taskId, itemEl);
+                    applyStatus(data, statusBadge, progressBar);
                 }
             } catch (e) {
                 console.error('Polling error', e);
             }
-        }, 500); // 每2秒轮询一次
+        }, 500); // 每 500 毫秒轮询一次
     }
 </script>
 

@@ -10,7 +10,7 @@ from typing import Any
 from src.common.logging.logger import node_log, logger, step_log
 from src.utils.task_utils import add_running_task, add_done_task
 from src.processor.import_processor.state import ImportGraphState
-from utils.lm.embedding_utils import generate_embeddings
+from src.utils.lm.embedding_utils import generate_embeddings
 
 # 向量化批次大小：每批处理 5 条切片，避免显存溢出
 EMBEDDING_BATCH_SIZE = 5

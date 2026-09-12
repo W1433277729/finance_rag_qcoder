@@ -7,13 +7,13 @@ import json
 
 from dotenv import load_dotenv
 
-from processor.import_processor.nodes.node_bge_embedding import node_bge_embedding
-from processor.import_processor.nodes.node_document_split import node_document_split
-from processor.import_processor.nodes.node_entry import node_entry
-from processor.import_processor.nodes.node_import_milvus import node_import_milvus
-from processor.import_processor.nodes.node_item_recognition import node_item_recognition
-from processor.import_processor.nodes.node_md_img import node_md_img
-from processor.import_processor.nodes.node_pdf_to_md import node_pdf_to_md
+from src.processor.import_processor.nodes.node_bge_embedding import node_bge_embedding
+from src.processor.import_processor.nodes.node_document_split import node_document_split
+from src.processor.import_processor.nodes.node_entry import node_entry
+from src.processor.import_processor.nodes.node_import_milvus import node_import_milvus
+from src.processor.import_processor.nodes.node_item_recognition import node_item_recognition
+from src.processor.import_processor.nodes.node_md_img import node_md_img
+from src.processor.import_processor.nodes.node_pdf_to_md import node_pdf_to_md
 
 from src.common.logging.logger import logger
 from langgraph.graph import END, StateGraph
@@ -101,7 +101,7 @@ workflow.add_edge('node_import_milvus', END)  # 向量数据持久化 -> END
 kb_import_app = workflow.compile()
 
 if __name__ == "__main__":
-    from utils.path_util import PROJECT_ROOT
+    from src.utils.path_util import PROJECT_ROOT
     import os
 
     # 全流程测试：验证PDF导入→Milvus入库完整链路

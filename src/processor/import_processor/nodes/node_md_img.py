@@ -14,15 +14,15 @@ from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from minio.deleteobjects import DeleteObject
 
-from common.config.lm_config import lm_config
-from common.config.minio_config import minio_config
-from common.logging.logger import node_log, logger, step_log
-from utils.clients.minio_utils import get_minio_client
-from utils.lm.lm_utils import get_llm_client
-from utils.load_prompt import load_prompt
-from utils.rate_limit_utils import apply_api_rate_limit
-from utils.task_utils import add_running_task, add_done_task
-from processor.import_processor.state import ImportGraphState
+from src.common.config.lm_config import lm_config
+from src.common.config.minio_config import minio_config
+from src.common.logging.logger import node_log, logger, step_log
+from src.utils.clients.minio_utils import get_minio_client
+from src.utils.lm.lm_utils import get_llm_client
+from src.utils.load_prompt import load_prompt
+from src.utils.rate_limit_utils import apply_api_rate_limit
+from src.utils.task_utils import add_running_task, add_done_task
+from src.processor.import_processor.state import ImportGraphState
 
 IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
 
@@ -224,6 +224,9 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
         # 不存在或者是文件 -> true
         # 存在是文件夹  or  没有没有文件 -> false
         logger.info(f"{md_path_obj}对应的md,没有图片内容,无需后续处理,直接跳出!!")
+        # 注意：这里是提前返回分支，同样要登记「已完成」，
+        # 否则该节点会永远留在 running 列表里，前端一直显示"正在进行Markdown图片处理..."
+        add_done_task(state.get('task_id'), "node_md_img")
         return state
 
     # =================== step2 获取图片上下文和信息 =======================
@@ -251,7 +254,7 @@ def node_md_img(state: ImportGraphState) -> ImportGraphState:
 
 if __name__ == "__main__":
     """本地测试入口：单独运行该文件时，执行MD图片处理全流程测试"""
-    from utils.path_util import PROJECT_ROOT
+    from src.utils.path_util import PROJECT_ROOT
 
     logger.info(f"本地测试 - 项目根目录：{PROJECT_ROOT}")
 

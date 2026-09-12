@@ -5,22 +5,42 @@
 """
 import os
 import shutil
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+# --------------------------
+# 路径兜底：确保「项目根目录」在 sys.path 中
+# 本项目内部模块统一使用 src.xxx 绝对导入（例如 src.utils.task_utils）。
+# 无论用 `python -m src.api.file_import_service` 还是 IDE 直接运行本文件，
+# 都必须保证项目根目录可被 import，否则 src 包无法解析。
+# --------------------------
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import FileResponse
 
-from common.logging.logger import logger
-from processor.import_processor.main_graph import kb_import_app
-from processor.import_processor.state import get_default_state
-from utils.path_util import PROJECT_ROOT
-from utils.task_utils import update_task_status, TASK_STATUS_PROCESSING, TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, \
-    add_running_task, add_done_task, get_done_task_list, get_running_task_list, get_task_status
+from src.common.logging.logger import logger
+from src.processor.import_processor.main_graph import kb_import_app
+from src.processor.import_processor.state import get_default_state
+from src.utils.path_util import PROJECT_ROOT
+from src.utils.task_utils import (
+    update_task_status,
+    TASK_STATUS_PROCESSING,
+    TASK_STATUS_COMPLETED,
+    TASK_STATUS_FAILED,
+    add_running_task,
+    add_done_task,
+    get_done_task_list,
+    get_running_task_list,
+    get_task_status,
+)
 
 # 定义fastapi 对象
 app = FastAPI(title='import service', description='掌柜智库查询服务')

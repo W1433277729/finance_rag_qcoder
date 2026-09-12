@@ -7,11 +7,11 @@ from typing import Any
 
 from pymilvus import DataType
 
-from common.config.milvus_config import milvus_config
+from src.common.config.milvus_config import milvus_config
 from src.common.logging.logger import node_log, logger, step_log
 from src.utils.task_utils import add_running_task, add_done_task
 from src.processor.import_processor.state import ImportGraphState
-from utils.clients.milvus_utils import get_milvus_client
+from src.utils.clients.milvus_utils import get_milvus_client
 
 
 @step_log("step_1_validate_and_get_data")

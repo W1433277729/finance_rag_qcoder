@@ -11,14 +11,14 @@ from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from pymilvus import DataType, MilvusClient
 
-from common.config.milvus_config import milvus_config
+from src.common.config.milvus_config import milvus_config
 from src.common.logging.logger import node_log, logger, step_log
 from src.utils.task_utils import add_running_task, add_done_task
 from src.processor.import_processor.state import ImportGraphState
-from utils.clients import milvus_utils
-from utils.lm import lm_utils
-from utils.lm.embedding_utils import generate_embeddings
-from utils.load_prompt import load_prompt
+from src.utils.clients import milvus_utils
+from src.utils.lm import lm_utils
+from src.utils.lm.embedding_utils import generate_embeddings
+from src.utils.load_prompt import load_prompt
 
 # 主体识别上下文切片数：取前 K 个切片用于 LLM 识别
 ITEM_NAME_CONTEXT_CHUNK_K = 5
