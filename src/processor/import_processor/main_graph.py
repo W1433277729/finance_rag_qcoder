@@ -156,10 +156,10 @@ if __name__ == "__main__":
 
                 # 打印核心指标
                 logger.info(f"📄 PDF转MD内容预览（前150字符）：{md_content}...")
-                logger.info(f"🏷️  识别的主体名称：{item_name}")
+                logger.info(f"🏷️ 识别的主体名称：{item_name}")
                 logger.info(f"📝 文档切分总切片数：{chunk_count}")
                 logger.info(f"🔍 所有切片是否完成向量化：{'是' if has_embedding else '否'}")
-                logger.info(f"🗄️  所有切片是否完成Milvus入库（含chunk_id）：{'是' if has_chunk_id else '否'}")
+                logger.info(f"🗄️ 所有切片是否完成Milvus入库（含chunk_id）：{'是' if has_chunk_id else '否'}")
                 logger.info(f"📂 最终状态包含的核心键：{list(final_state.keys())}")
                 logger.info("-" * 80)
         except Exception as e:

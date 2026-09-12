@@ -106,7 +106,7 @@ def step_3_image_summary(images_info_list: list[Tuple[str, str, Tuple[str, str]]
     """
     summary_img_dict = {}
     # 1.准备模型对象
-    vl_model = get_llm_client(model=lm_config.llm_model)
+    vl_model = get_llm_client(model=lm_config.vl_model)
     # 2.循环 images_info_list，获取每张图片信息
     for image_name, image_path, image_content in images_info_list:
         # 将图片信息拼接为提示词

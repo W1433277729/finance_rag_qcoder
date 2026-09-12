@@ -269,10 +269,9 @@ def node_document_split(state: ImportGraphState) -> ImportGraphState:
     """
     节点：文档切分节点
     """
-    add_running_task(state['task_id'], 'node_document_split')
+    add_running_task(state.get('task_id'), 'node_document_split')
     # =================== step1 校验并获取参数 ===================
     md_content, file_title, md_path = step_1_validate_get_data(state)
-    add_done_task(state['task_id'], 'node_document_split')
     # =================== step2 根据语义文本切分 ===================
     # 根据标题进行内容切分
     chunks: list[dict[str, Any]] = step_2_split_document_by_title(md_content, file_title)
@@ -286,7 +285,7 @@ def node_document_split(state: ImportGraphState) -> ImportGraphState:
     # =================== step5 备份chunks，更新state ===================
     step_5_backup_chunks_json(chunks, md_path)
     state['chunks'] = chunks
-    add_done_task(state['task_id'], 'node_document_split')
+    add_done_task(state.get('task_id'), 'node_document_split')
     return state
 
 

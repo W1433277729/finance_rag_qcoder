@@ -1,5 +1,6 @@
 from typing import Dict, List
 from .sse_utils import push_to_session
+from common.logging.logger import logger
 
 # ---------------------------
 # 内存态任务追踪（单进程）
@@ -78,6 +79,7 @@ def add_running_task(task_id: str, node_name: str, is_stream: bool = False) -> N
     # 避免重复追加
     if node_name not in running:
         running.append(node_name)
+        logger.info(f'running中添加{node_name}')
 
     if is_stream:
         task_push_queue(task_id)
@@ -98,6 +100,7 @@ def add_done_task(task_id: str, node_name: str, is_stream: bool = False) -> None
     # 1) 从 running 中移除同名节点（可能出现重复，移除所有）
     running = _tasks_running_list[task_id]
     _tasks_running_list[task_id] = [n for n in running if n != node_name]
+    logger.info(f'running中移除{node_name}')
 
     # 2) 追加到 done（保持完成顺序），避免重复
     done = _tasks_done_list[task_id]
