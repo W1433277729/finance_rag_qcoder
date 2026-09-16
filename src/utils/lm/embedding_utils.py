@@ -39,7 +39,7 @@ def get_bge_m3_ef():
             model_name=model_name,
             device=device,
             use_fp16=use_fp16,
-            normalize_embeddings=True  # 模型原生对稠密+稀疏向量做L2归一化
+            normalize_embeddings=True  # 模型原生对稠密向量做L2归一化
         )
         logger.success("BGE-M3模型初始化成功，已开启原生L2归一化")
         return _bge_m3_ef

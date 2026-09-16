@@ -38,7 +38,7 @@ _NODE_NAME_TO_CN: Dict[str, str] = {
     "__end__": "处理完成",
     "END": "处理完成",
     # --- Query 流程节点（kb/query_process/main_graph.py）---
-    "node_item_confirm": "确认问题产品",
+    "node_item_name_confirm": "确认问题产品",
     "node_answer_output": "生成答案",
     "node_rerank": "重排序",
     "node_rrf": "倒排融合",
@@ -79,7 +79,6 @@ def add_running_task(task_id: str, node_name: str, is_stream: bool = False) -> N
     # 避免重复追加
     if node_name not in running:
         running.append(node_name)
-        logger.info(f'running中添加{node_name}')
 
     if is_stream:
         task_push_queue(task_id)
@@ -100,7 +99,6 @@ def add_done_task(task_id: str, node_name: str, is_stream: bool = False) -> None
     # 1) 从 running 中移除同名节点（可能出现重复，移除所有）
     running = _tasks_running_list[task_id]
     _tasks_running_list[task_id] = [n for n in running if n != node_name]
-    logger.info(f'running中移除{node_name}')
 
     # 2) 追加到 done（保持完成顺序），避免重复
     done = _tasks_done_list[task_id]
