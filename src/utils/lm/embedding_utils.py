@@ -48,7 +48,7 @@ def get_bge_m3_ef():
         raise  # 向上抛出异常，由调用方处理
 
 
-def generate_embeddings(texts):
+def generate_embeddings(texts: list[str]):
     """
     为文本列表生成稠密+稀疏混合向量嵌入（模型原生L2归一化）
     :param texts: 要生成嵌入的文本列表，单文本也需封装为列表
