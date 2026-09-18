@@ -114,7 +114,7 @@ def step_2_split_document_by_title(md_content: str, file_title: str) -> list[dic
             # 获取当前标题级别
             heading_level = len(line_strip) - len(line_strip.lstrip("#"))
             if current_title and len(current_content_lines) > 0:
-                if not has_flushed_first_chunk and orphan_lines:
+                if not has_flushed_first_chunk and len(orphan_lines) > 0:
                     current_content_lines = orphan_lines + current_content_lines
                     has_flushed_first_chunk = True
                     orphan_lines = []
@@ -153,7 +153,7 @@ def step_2_split_document_by_title(md_content: str, file_title: str) -> list[dic
             "content": full_content,
             "file_title": file_title
         })
-    elif not current_title and len(orphan_lines):
+    elif (not current_title) and len(orphan_lines):
         chunks.append({
             "title": file_title,
             "content": "\n".join(orphan_lines),
@@ -169,7 +169,7 @@ def _split_chunk_content(chunk: dict[str, Any]) -> list[dict[str, Any]]:
     prefix = chunk.get('title') + '\n'
     deal_content = content[len(prefix):]
     rc_splitter = RecursiveCharacterTextSplitter(
-        separators=["\n\n", "\n", "。", "！", "？", "；"],
+        separators=["\n\n", "\n", "。", "！", "？", "；", "，", " "],
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
 
@@ -197,7 +197,7 @@ def _merge_chunk_content(refine_chunks: list[dict[str, Any]]) -> list[dict[str, 
             base_chunk = next_chunk
             continue
         # 如果 文本内容大于400
-        too_long = len(next_chunk['content']) > CHUNK_SIZE
+        too_long = len(base_chunk['content']) > CHUNK_MIN
         if not too_long:
             # 是否是同一主题
             is_same_parent_title = (base_chunk.get("parent_title") and base_chunk.get("parent_title") == next_chunk.get(
