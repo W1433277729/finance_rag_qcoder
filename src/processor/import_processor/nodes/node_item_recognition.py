@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from pymilvus import DataType, MilvusClient
 
 from src.common.config.milvus_config import milvus_config
@@ -25,7 +25,33 @@ ITEM_NAME_CONTEXT_CHUNK_K = 5
 # 主体识别上下文总字符数上限：防止上下文过长导致大模型输入超限
 ITEM_NAME_CONTEXT_TOTAL_MAX_CHARS = 2000
 
+# 金融元数据抽取上下文切片数：比主体识别取更多切片，提升 content_type 等字段判断准确度
+METADATA_CONTEXT_CHUNK_K = 7
+# 金融元数据抽取上下文总字符数上限
+METADATA_CONTEXT_TOTAL_MAX_CHARS = 6000
+
 COLLECTION_NAME = milvus_config.item_name_collection
+
+# 金融文档级元数据字段（由 LLM 抽取，回填到该文档的所有 chunk）
+FINANCE_METADATA_FIELDS = [
+    "content_type", "product_name", "product_code", "institution_name",
+    "risk_level", "industry", "market", "publish_date",
+]
+
+
+def _build_recognition_context(chunks: list[dict[str, Any]], chunk_k: int, max_chars: int) -> str:
+    """
+    取前 chunk_k 个切片拼接为识别上下文，并限制总字符数为 max_chars
+    :param chunks: 文档切片列表
+    :param chunk_k: 取用的切片数量
+    :param max_chars: 上下文总字符数上限
+    :return: 拼接后的上下文字符串
+    """
+    context = ''
+    for chunk in chunks[:chunk_k]:
+        context += f'标题:{chunk.get('parent_title')},内容:{chunk.get('content')}\n'
+    return context[:max_chars]
+
 
 
 @step_log("step_1_validate_and_get_data")
@@ -74,10 +100,7 @@ def step_2_call_llm_return_item_name(chunks: list[dict[str, Any]], file_title) -
     # 创建模型
     model = lm_utils.get_llm_client()
     # 构建提示词
-    context = ''
-    for chunk in chunks[:ITEM_NAME_CONTEXT_CHUNK_K]:
-        context += f'标题:{chunk.get('parent_title')},内容:{chunk.get('content')}\n'
-    context = context[:ITEM_NAME_CONTEXT_TOTAL_MAX_CHARS]
+    context = _build_recognition_context(chunks, ITEM_NAME_CONTEXT_CHUNK_K, ITEM_NAME_CONTEXT_TOTAL_MAX_CHARS)
     prompt_text = load_prompt('item_name_recognition', file_title=file_title, context=context)
     message = HumanMessage(content=prompt_text)
     # 拼接链
@@ -87,6 +110,50 @@ def step_2_call_llm_return_item_name(chunks: list[dict[str, Any]], file_title) -
         item_name = file_title
         logger.warning(f"没有识别出item_name,使用file_title赋值:{item_name}")
     return item_name
+
+
+@step_log("step_2b_extract_finance_metadata")
+def step_2b_extract_finance_metadata(chunks: list[dict[str, Any]], file_title: str) -> dict[str, str]:
+    """
+    调用模型抽取金融文档级元数据（content_type/product_name/... ）
+    :param chunks: 文档切片列表
+    :param file_title: 文件名
+    :return: 元数据字典，缺失字段以空字符串兜底
+    """
+    metadata: dict[str, str] = {field: "" for field in FINANCE_METADATA_FIELDS}
+    try:
+        model = lm_utils.get_llm_client(json_mode=True)
+        context = _build_recognition_context(chunks, METADATA_CONTEXT_CHUNK_K, METADATA_CONTEXT_TOTAL_MAX_CHARS)
+        prompt_text = load_prompt('finance_metadata_extract', file_title=file_title, context=context)
+        message = HumanMessage(content=prompt_text)
+        chains = model | JsonOutputParser()
+        extracted: dict = chains.invoke([message])
+        for field in FINANCE_METADATA_FIELDS:
+            value = extracted.get(field)
+            metadata[field] = str(value).strip() if value else ""
+        logger.info(f"金融元数据抽取完成:{metadata}")
+    except Exception as e:
+        # 元数据抽取失败不阻断导入主流程，全部留空兜底
+        logger.warning(f"金融元数据抽取失败,使用空值兜底,原因:{str(e)}")
+    return metadata
+
+
+@step_log("step_3b_padding_metadata_to_chunks")
+def step_3b_padding_metadata_to_chunks(chunks: list[dict[str, Any]], metadata: dict[str, str], state: ImportGraphState):
+    """
+    把文档级金融元数据 + 来源信息回填到每个 chunk
+    :param chunks: 文档切片列表
+    :param metadata: 文档级元数据
+    :param state: 用于取 input_file_path 作为来源路径
+    """
+    input_file_path: str = state.get("input_file_path", "") or ""
+    source_file = Path(input_file_path).name if input_file_path else state.get("file_title", "")
+    for chunk in chunks:
+        for field in FINANCE_METADATA_FIELDS:
+            chunk[field] = (metadata.get(field, "") or "")[:250]
+        chunk['source_file'] = source_file[:500]
+        chunk['source_path'] = input_file_path[:1000]
+        chunk['entry_name'] = (chunk.get('title', '') or '')[:250]
 
 
 @step_log("step_3_padding_item_name_to_chunks")
@@ -186,6 +253,10 @@ def node_item_recognition(state: ImportGraphState) -> ImportGraphState:
 
     # ======================== step3 回填数据，修改chunks内容 ===================
     step_3_padding_item_name_to_chunks(chunks, item_name)
+
+    # ======================== step3b 抽取并回填金融元数据 ===================
+    metadata: dict[str, str] = step_2b_extract_finance_metadata(chunks, file_title)
+    step_3b_padding_metadata_to_chunks(chunks, metadata, state)
 
     # ======================== step4 创建集合 ============================
     step_4_prepared_item_name_collection()

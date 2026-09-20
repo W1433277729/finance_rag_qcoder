@@ -80,7 +80,7 @@ if __name__ == '__main__':
     logger.info("===== 开始测试 =====")
 
     initial_state = create_query_default_state(session_id="test_001",
-                                               original_query="华为P60怎么样?")
+                                               original_query="华夏债券C的风险等级是多少?")
     final_state = None
 
     # 只输出更最终的状态值（字典形式），不包含节点名称、执行日志、元数据等额外信息  stream_mode默认为updates

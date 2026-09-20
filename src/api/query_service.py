@@ -77,7 +77,8 @@ def run_query_graph(session_id: str, user_query: str, is_stream: bool = True):
                 {
                     "answer": state.get("answer"),
                     "status": "completed",
-                    "image_urls": state.get("image_urls", [])
+                    "image_urls": state.get("image_urls", []),
+                    "references": state.get("references", [])
                 }
             )
             logger.info('已经结束：final push_to_session')
@@ -119,7 +120,8 @@ def query(background_tasks: BackgroundTasks, request: QueryRequest):
             "message": f"{session_id}已经完成问题解析!",
             "answer": state.get("answer"),
             "done_list": done_list,
-            "image_urls": state.get("image_urls", [])
+            "image_urls": state.get("image_urls", []),
+            "references": state.get("references", [])
         }
 
 

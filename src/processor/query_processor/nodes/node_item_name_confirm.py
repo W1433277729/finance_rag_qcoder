@@ -239,9 +239,10 @@ def step_5_select_confirmed_and_option_item_names(search_result: dict[str, list[
 def step_6_change_state_property(state: QueryGraphState, rewritten_query, confirmed_option_dict):
     """
     更新state
-      场景1: 有可信的列表 item_names rewritten_query 一定不能更新answer
-      场景2: 没有可信,有可选 answer ...
-      场景3: 其余 answer ..
+      场景1: 有可信主体 -> item_names + rewritten_query,继续检索(不写answer)
+      场景2: 无可信但有可选主体 -> 写answer反问用户澄清
+      场景3: 无可信也无可选(知识/概念类问题,或产品未匹配) -> item_names置空,
+             仅保留rewritten_query,走「无主体过滤」的全库检索(不写answer)
     :param state:
     :param rewritten_query:
     :param confirmed_option_dict:
@@ -250,20 +251,25 @@ def step_6_change_state_property(state: QueryGraphState, rewritten_query, confir
     confirmed_list = confirmed_option_dict.get("confirmed", [])
     option_list = confirmed_option_dict.get("option", [])
 
+    # 无论哪种场景,都保留改写后的问题供后续检索使用(空则回退原始问题)
+    state['rewritten_query'] = rewritten_query or state.get('original_query')
+
     if confirmed_list:
-        # 场景1: 有可信的列表 item_names rewritten_query 一定不能更新answer
+        # 场景1: 有可信主体
         state['item_names'] = confirmed_list
-        state['rewritten_query'] = rewritten_query
-        logger.info(f"已经有明确的item_name列表,已经更新state item_name以及rewritten_query属性!")
+        logger.info(f"已确认金融产品主体:{confirmed_list},更新item_names与rewritten_query!")
         return
 
     if option_list:
-        # 场景2: 没有可信,有可选 answer ...
-        state['answer'] = f"没有可信的item_name,但是有可选的:{option_list},请您明确!"
-        logger.info(f"没有明确的item_name列表,但是有可选的!已经更新answer属性!")
+        # 场景2: 无可信,有可选 -> 反问用户澄清
+        state['answer'] = f"您想查询的是以下哪个产品：{'、'.join(option_list)}？请明确后再提问。"
+        logger.info(f"存在多个候选主体:{option_list},已写入反问answer!")
         return
 
-    state['answer'] = f"没有可信,也没有可选的实体列表,请明确以后再次问题!!"
+    # 场景3: 无可信也无可选 -> 知识/概念类或未匹配查询,走无过滤全库检索
+    state['item_names'] = []
+    logger.info("未确认到具体金融产品主体,按知识/概念类问题继续走全库检索!")
+
 
 
 @step_log("step_7_save_user_chat_message")

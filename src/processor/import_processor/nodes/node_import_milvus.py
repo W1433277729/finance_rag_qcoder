@@ -42,8 +42,14 @@ def step_2_prepared_item_name_collection():
     # 检查是否存在集合
     has_collection = milvus_client.has_collection(collection_name=milvus_config.chunks_collection)
     if has_collection:
-        logger.info(f"{milvus_config.chunks_collection}已经存在,可以直接使用!")
-        return
+        # 兼容旧 schema：若集合缺少金融元数据字段(content_type)，则 drop 后按新 schema 重建
+        desc = milvus_client.describe_collection(collection_name=milvus_config.chunks_collection)
+        existing_fields = {field.get("name") for field in desc.get("fields", [])}
+        if "content_type" in existing_fields:
+            logger.info(f"{milvus_config.chunks_collection}已经存在且为新schema,可以直接使用!")
+            return
+        logger.warning(f"{milvus_config.chunks_collection}为旧schema(缺少金融元数据字段),执行drop后重建!")
+        milvus_client.drop_collection(collection_name=milvus_config.chunks_collection)
     logger.info(f"{milvus_config.chunks_collection}不存在,进行集合的创建!")
     # 1.创建schema
     schema = milvus_client.create_schema(
@@ -57,6 +63,18 @@ def step_2_prepared_item_name_collection():
     schema.add_field(field_name="title", datatype=DataType.VARCHAR, max_length=256)
     schema.add_field(field_name="parent_title", datatype=DataType.VARCHAR, max_length=256)
     schema.add_field(field_name="part", datatype=DataType.INT8)
+    # ---- 金融元数据字段（需求 §5，由 LLM 抽取回填）----
+    schema.add_field(field_name="content_type", datatype=DataType.VARCHAR, max_length=64)
+    schema.add_field(field_name="product_name", datatype=DataType.VARCHAR, max_length=256)
+    schema.add_field(field_name="product_code", datatype=DataType.VARCHAR, max_length=64)
+    schema.add_field(field_name="institution_name", datatype=DataType.VARCHAR, max_length=256)
+    schema.add_field(field_name="risk_level", datatype=DataType.VARCHAR, max_length=32)
+    schema.add_field(field_name="industry", datatype=DataType.VARCHAR, max_length=64)
+    schema.add_field(field_name="market", datatype=DataType.VARCHAR, max_length=64)
+    schema.add_field(field_name="publish_date", datatype=DataType.VARCHAR, max_length=32)
+    schema.add_field(field_name="entry_name", datatype=DataType.VARCHAR, max_length=256)
+    schema.add_field(field_name="source_file", datatype=DataType.VARCHAR, max_length=512)
+    schema.add_field(field_name="source_path", datatype=DataType.VARCHAR, max_length=1024)
     schema.add_field(field_name="dense_vector", datatype=DataType.FLOAT_VECTOR,
                      dim=1024)  # 稠密向量和嵌入式模型有关系 1. 生成的浮点类型 16 32 8 2. 维度
     schema.add_field(field_name="sparse_vector", datatype=DataType.SPARSE_FLOAT_VECTOR)

@@ -29,14 +29,14 @@ RERANK_GAP_ABS: float = 0.5
 
 @step_log("step_1_validate_and_get_data")
 def step_1_validate_and_get_data(state: QueryGraphState):
-    # 1. 获取请求参数
-    rrf_chunks = state.get("rrf_chunks", [])
-    web_search_docs = state.get("web_search_docs", [])
+    # 1. 获取请求参数（rrf_chunks / web_search_docs 允许为空，rewritten_query 必须存在）
+    rrf_chunks = state.get("rrf_chunks", []) or []
+    web_search_docs = state.get("web_search_docs", []) or []
     rewritten_query = state.get("rewritten_query")
     # 2. 非空判断
-    if (not rrf_chunks) or (not web_search_docs) or (not rewritten_query):
-        logger.error(f"rrf_chunks,web_search_docs,rewritten_query参数可能为空,业务无法继续,提前终止!")
-        raise ValueError(f"rrf_chunks,web_search_docs,rewritten_query参数可能为空,业务无法继续,提前终止!")
+    if not rewritten_query:
+        logger.error(f"rewritten_query为空,业务无法继续,提前终止!")
+        raise ValueError(f"rewritten_query为空,业务无法继续,提前终止!")
     return rrf_chunks, web_search_docs, rewritten_query
 
 
@@ -50,7 +50,7 @@ def step_2_merge_rrf_and_web(rrf_chunks: list[dict], web_search_docs: list[dict]
         """
     # 1. 定一个融合集合
     merged_list: list = []
-    # 2. 循环rrf路
+    # 2. 循环rrf路（透传金融元数据，供答案生成引用来源使用）
     for chunk in rrf_chunks:
         merged_list.append(
             {
@@ -58,7 +58,13 @@ def step_2_merge_rrf_and_web(rrf_chunks: list[dict], web_search_docs: list[dict]
                 "title": chunk.get("title"),
                 "text": chunk.get("content"),
                 "type": chunk.get("type"),
-                "url": ""
+                "url": "",
+                "item_name": chunk.get("item_name"),
+                "content_type": chunk.get("content_type"),
+                "product_name": chunk.get("product_name"),
+                "institution_name": chunk.get("institution_name"),
+                "publish_date": chunk.get("publish_date"),
+                "source_file": chunk.get("source_file"),
             }
         )
     # 3. 循环web_search_docs
@@ -69,7 +75,8 @@ def step_2_merge_rrf_and_web(rrf_chunks: list[dict], web_search_docs: list[dict]
                 "title": doc.get("title"),
                 "text": doc.get("snippet"),
                 "type": "web",
-                "url": doc.get("url")
+                "url": doc.get("url"),
+                "content_type": "联网搜索",
             }
         )
     logger.info(f"完成两路{len(rrf_chunks)}:{len(web_search_docs)}数据融合,融合后的数量:{len(merged_list)}")
@@ -93,6 +100,9 @@ def step_3_create_question_answer_pair(merged_list: list[dict], rewritten_query:
 
 @step_log("step_4_merge_rrf_and_web")
 def step_4_list_score_and_rank(merged_list: list[dict], question_answer_pair: list[list[str]]):
+    if not merged_list:
+        logger.warning("融合结果为空,跳过重排序打分!")
+        return
     reranker_model = get_reranker_model()
     score_list = reranker_model.compute_score(question_answer_pair, normalize=True)
     logger.debug(f"完成了数据打分:{score_list}")
@@ -106,6 +116,8 @@ def step_4_list_score_and_rank(merged_list: list[dict], question_answer_pair: li
 
 @step_log("step_5_dynamic_topk")
 def step_5_dynamic_topk(merged_list):
+    if not merged_list:
+        return []
     max_topk = min(RERANK_MAX_TOPK, len(merged_list))
     min_topk = RERANK_MIN_TOPK
     # 定义topk
@@ -119,7 +131,8 @@ def step_5_dynamic_topk(merged_list):
             current = merged_list[index]
             next = merged_list[index + 1]
             abs = current.get("score", 0.0) - next.get("score", 0.0)
-            ratio = abs / current.get("score")
+            current_score = current.get("score") or 0.0
+            ratio = abs / current_score if current_score else 0.0
             # 比较断崖
             if abs > RERANK_GAP_ABS or ratio > RERANK_GAP_RATIO:
                 # 发生断崖了

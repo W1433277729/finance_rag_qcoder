@@ -5,6 +5,33 @@ from src.common.logging.logger import logger            # 项目统一日志工�
 # 全局Milvus客户端实例，实现单例复用
 _milvus_client = None
 
+# kb_chunks 检索时统一返回的字段（含金融元数据，供答案生成与引用来源使用）
+CHUNK_OUTPUT_FIELDS = [
+    'chunk_id', 'item_name', 'file_title', 'title', 'parent_title', 'part', 'content',
+    'content_type', 'product_name', 'product_code', 'institution_name', 'risk_level',
+    'industry', 'market', 'publish_date', 'entry_name', 'source_file', 'source_path',
+]
+
+
+
+def _ensure_database(milvus_uri: str, database: str):
+    """
+    确保目标数据库存在：用默认库引导连接，检测目标库，不存在则创建。
+    database 为空或 default 时无需处理。
+    :param milvus_uri: Milvus 服务地址
+    :param database: 目标数据库名
+    """
+    if not database or database == "default":
+        return
+    # 引导客户端：连接默认库（不指定 db_name），用于库级别的管理操作
+    bootstrap_client = MilvusClient(uri=milvus_uri)
+    existing_databases = bootstrap_client.list_databases()
+    if database not in existing_databases:
+        bootstrap_client.create_database(database)
+        logger.info(f"Milvus数据库[{database}]不存在,已自动创建!")
+    else:
+        logger.debug(f"Milvus数据库[{database}]已存在,直接使用!")
+
 
 def get_milvus_client():
     """
@@ -22,6 +49,8 @@ def get_milvus_client():
             if not milvus_uri:
                 logger.error("Milvus客户端连接失败：缺少MILVUS_URL环境变量配置")
                 return None
+            # 连接前先确保目标数据库存在（不存在则创建），避免 database not found 报错
+            _ensure_database(milvus_uri, database)
             # 初始化Milvus客户端
             _milvus_client = MilvusClient(uri=milvus_uri, db_name=database)
             logger.info("Milvus客户端连接成功")

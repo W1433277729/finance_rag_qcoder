@@ -74,5 +74,5 @@ if __name__ == '__main__':
     测试
     """
     # 创建默认状态
-    state = create_default_state(input_file_path="万用表RS-12的使用.pdf")
+    state = create_default_state(input_file_path="华夏债券C基金产品资料概要.pdf")
     logger.info(state)

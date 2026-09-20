@@ -76,10 +76,15 @@ def node_web_search_mcp(state: QueryGraphState):
     # 1、参数获取及校验，返回 已改写的问题
     rewritten_query: str = step_1_validate_and_get_data(state)
     # 2、创建mcp服务，进行工具调用
-    result = asyncio.run(step_2_call_mcp_tool(rewritten_query))
-    # 3、结果解析
-    text_result: str = result.content[0].text
-    web_search_docs = json.loads(text_result).get('pages', [])
+    web_search_docs = []
+    try:
+        result = asyncio.run(step_2_call_mcp_tool(rewritten_query))
+        # 3、结果解析（联网失败/无结果时降级为空，不阻断整体查询）
+        if result and getattr(result, "content", None):
+            text_result: str = result.content[0].text
+            web_search_docs = json.loads(text_result).get('pages', [])
+    except Exception as e:
+        logger.warning(f"联网搜索失败,降级为无联网结果继续查询,原因:{str(e)}")
 
     add_done_task(state["session_id"], sys._getframe().f_code.co_name, state["is_stream"])
     logger.info("---node-web-search-mcp处理结束---")

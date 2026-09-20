@@ -108,7 +108,7 @@ if __name__ == "__main__":
     logger.info("===== 开始执行知识图谱导入全流程测试 =====")
 
     # 1. 构造测试文件路径（复用你项目的doc目录）
-    test_pdf_name = os.path.join("doc", "hak180产品安全手册.pdf")
+    test_pdf_name = os.path.join("doc", "基金产品", "华夏债券投资基金（华夏债券C）基金产品资料概要更新.pdf")
     test_pdf_path = os.path.join(PROJECT_ROOT, test_pdf_name)
 
     # 2. 构造输出目录（存放MD/图片等中间文件）
@@ -125,7 +125,7 @@ if __name__ == "__main__":
             "task_id": "test_kg_import_workflow_001",  # 测试任务ID
             "input_file_path": test_pdf_path,  # 测试PDF文件路径
             "output_file_dir": test_output_dir,  # 中间文件输出目录
-            "is_pdf_read_enabled": False,  # 开启PDF解析（核心开关）
+            "is_pdf_read_enabled": True,  # 开启PDF解析（核心开关）
             "is_md_read_enabled": False  # 关闭MD解析
         })
         try:

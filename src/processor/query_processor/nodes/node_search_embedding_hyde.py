@@ -13,7 +13,8 @@ from src.common.config.milvus_config import milvus_config
 from src.common.logging.logger import node_log, logger, step_log
 from src.processor.query_processor.state import QueryGraphState
 from src.utils.clients import milvus_utils
-from src.utils.clients.milvus_utils import create_hybrid_search_requests, hybrid_search, get_milvus_client
+from src.utils.clients.milvus_utils import create_hybrid_search_requests, hybrid_search, get_milvus_client, \
+    CHUNK_OUTPUT_FIELDS
 from src.utils.lm.embedding_utils import generate_embeddings
 
 from src.utils.lm.lm_utils import get_llm_client
@@ -26,12 +27,12 @@ def step_1_validate_and_get_data(state: QueryGraphState):
     # 1. 获取数据
     item_names: list[str] = state.get("item_names", [])
     rewritten_query: str = state.get("rewritten_query")
-    # 2. 参数校验
-    if (not item_names) or (not rewritten_query):
-        # [ for item in list if xx  else xxx -> 没有]
-        # 值  if  xx else 值
-        logger.error(f"item_names或者rewritten_query为空,业务无法继续,提前终止!")
-        raise ValueError(f"item_names或者rewritten_query为空,业务无法继续,提前终止!")
+    # 2. 参数校验：rewritten_query 必须存在；item_names 允许为空（知识/概念类查询走全库检索）
+    if not rewritten_query:
+        logger.error(f"rewritten_query为空,业务无法继续,提前终止!")
+        raise ValueError(f"rewritten_query为空,业务无法继续,提前终止!")
+    if not item_names:
+        logger.info("item_names为空,按知识/概念类问题进行无主体过滤的全库检索")
     # 3. 返回结果
     return item_names, rewritten_query
 
@@ -71,9 +72,11 @@ def step_3_select_chunks_in_milvus(item_names: list[str], rewritten_query: str, 
     dense_vector = embedding_result.get('dense')[0]
     sparse_vector = embedding_result.get('sparse')[0]
 
-    # 2、构建过滤条件
-    item_names_str = ','.join(f'\"{item_name}\"' for item_name in item_names)
-    expr: str = f'item_name in [{item_names_str}]'
+    # 2、构建过滤条件：有主体则按 item_name 过滤，无主体则不加过滤（全库检索）
+    expr: str | None = None
+    if item_names:
+        item_names_str = ','.join(f'\"{item_name}\"' for item_name in item_names)
+        expr = f'item_name in [{item_names_str}]'
 
     # 2、构建混合检索请求
     reqs = create_hybrid_search_requests(
@@ -93,7 +96,7 @@ def step_3_select_chunks_in_milvus(item_names: list[str], rewritten_query: str, 
         ranker_weights=(0.5, 0.5),
         norm_score=True,
         limit=5,
-        output_fields=['chunk_id', 'item_name', 'file_title', 'title', 'parent_title', 'part', 'content']
+        output_fields=CHUNK_OUTPUT_FIELDS
     )
 
     if not response:
@@ -106,17 +109,10 @@ def step_4_after_deal_milvus_result(real_response: list[dict]) -> list[dict]:
     if real_response:
         for item in real_response:
             chunk = item.get('entity', {})
-            hyde_embedding_chunks.append({
-                'chunk_id': chunk.get('chunk_id'),
-                'item_name': chunk.get('item_name'),
-                'file_title': chunk.get('file_title'),
-                'title': chunk.get('title'),
-                'parent_title': chunk.get('parent_title'),
-                'part': chunk.get('part'),
-                'content': chunk.get('content'),
-                'score': item.get('distance', 0.0),
-                'type': 'milvus'
-            })
+            flat = {field: chunk.get(field) for field in CHUNK_OUTPUT_FIELDS}
+            flat['score'] = item.get('distance', 0.0)
+            flat['type'] = 'milvus'
+            hyde_embedding_chunks.append(flat)
     logger.info(f"完成了问题向量检索!检索的数量:{len(hyde_embedding_chunks)}")
     return hyde_embedding_chunks
 

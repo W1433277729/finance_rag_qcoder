@@ -311,7 +311,7 @@ if __name__ == '__main__':
     logger.info(f"本地测试 - 项目根目录：{PROJECT_ROOT}")
 
     # 测试MD文件路径（需手动将测试文件放入对应目录）
-    test_md_name = os.path.join(r"output\hak180产品安全手册", "hak180产品安全手册_new.md")
+    test_md_name = os.path.join(r"output\华夏债券C基金产品资料概要", "华夏债券C基金产品资料概要_new.md")
     test_md_path = os.path.join(PROJECT_ROOT, test_md_name)
 
     # 校验测试文件是否存在
@@ -324,7 +324,7 @@ if __name__ == '__main__':
             "md_path": test_md_path,
             "task_id": "test_task_123456",
             "md_content": "",
-            "file_title": "hak180产品安全手册",
+            "file_title": "华夏债券C基金产品资料概要",
             "local_dir": os.path.join(PROJECT_ROOT, "output"),
         }
         logger.info("开始本地测试 - MD图片处理全流程")

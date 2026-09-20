@@ -14,6 +14,9 @@ from src.utils.load_prompt import load_prompt
 from src.utils.sse_utils import push_to_session, SSEEvent
 from src.utils.task_utils import add_running_task, add_done_task
 
+# 无资料兜底话术（需求 §6.3），与 answer_out.prompt 中保持一致
+NO_INFO_FALLBACK_ANSWER = "当前知识库中未检索到足够信息，建议查看正式产品文件、公告原文或咨询相关工作人员。"
+
 
 @step_log("step_1_answer_exists_in_state")
 def step_1_answer_exists_in_state(state: QueryGraphState) -> bool:
@@ -28,15 +31,16 @@ def step_1_answer_exists_in_state(state: QueryGraphState) -> bool:
 
 @step_log("step_2_validate_and_get_data")
 def step_2_validate_and_get_data(state: QueryGraphState):
-    reranked_docs = state.get("reranked_docs")
+    reranked_docs = state.get("reranked_docs", []) or []
     session_id = state.get("session_id")
-    item_names = state.get("item_names")
+    item_names = state.get("item_names", []) or []
     rewritten_query = state.get("rewritten_query")
     is_stream = state.get("is_stream", False)
 
-    if (not reranked_docs) or (not session_id) or (not item_names) or (not rewritten_query):
-        logger.error("核心参数为空,业务无法继续,提前终止!")
-        raise ValueError("核心参数为空,业务无法继续,提前终止!")
+    # reranked_docs / item_names 允许为空（无资料时走兜底话术，知识类查询无主体）
+    if (not session_id) or (not rewritten_query):
+        logger.error("session_id或rewritten_query为空,业务无法继续,提前终止!")
+        raise ValueError("session_id或rewritten_query为空,业务无法继续,提前终止!")
     return reranked_docs, session_id, item_names, rewritten_query, is_stream
 
 
@@ -78,11 +82,20 @@ def step_4_create_answer_prompt(reranked_docs, history_message, item_names, rewr
     :param rewritten_query:
     :return:
     """
-    # reranked_docs => [{ chunk_id , [  title , text , type , score ] ,url   }]
+    # reranked_docs => [{ chunk_id , [  title , text , type , score ] ,url, 金融元数据... }]
     context: str = ""
     for doc in reranked_docs:
-        context += (f"标题:{doc.get('title')},数据类源:{'联网搜索' if doc.get('type') == 'web' else '向量数据库'}, "
-                    f"置信度:{doc.get('score')},内容:{doc.get('text')} \n")
+        source_type = '联网搜索' if doc.get('type') == 'web' else '向量数据库'
+        context += (
+            f"标题:{doc.get('title')},"
+            f"内容类型:{doc.get('content_type', '')},"
+            f"产品名称:{doc.get('product_name', '')},"
+            f"机构:{doc.get('institution_name', '')},"
+            f"发布时间:{doc.get('publish_date', '')},"
+            f"来源文件:{doc.get('source_file', '')},"
+            f"数据类源:{source_type},"
+            f"置信度:{doc.get('score')},内容:{doc.get('text')} \n"
+        )
 
     # history_text:str = ""
     if history_message:
@@ -174,6 +187,35 @@ def step_6_extract_chunk_and_url_image(reranked_docs) -> list[str]:
     return image_urls
 
 
+@step_log("step_6b_build_references")
+def step_6b_build_references(reranked_docs) -> list[dict]:
+    """
+      从参考内容中抽取去重后的引用来源列表（需求 §6.2）
+    :param reranked_docs:
+    :return: [{document_title, content_type, product_name, institution_name, publish_date, source_file, type}]
+    """
+    references: list[dict] = []
+    seen: set = set()
+    for doc in reranked_docs:
+        doc_type = 'web' if doc.get('type') == 'web' else 'milvus'
+        # 去重键：来源文件 + 标题 + 类型
+        dedup_key = (doc.get('source_file', ''), doc.get('title', ''), doc_type)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        references.append({
+            "document_title": doc.get('title', ''),
+            "content_type": doc.get('content_type', '') or ('联网搜索' if doc_type == 'web' else ''),
+            "product_name": doc.get('product_name', ''),
+            "institution_name": doc.get('institution_name', ''),
+            "publish_date": doc.get('publish_date', ''),
+            "source_file": doc.get('source_file', '') or doc.get('url', ''),
+            "type": doc_type,
+        })
+    logger.info(f"完成引用来源构建,数量:{len(references)}")
+    return references
+
+
 @step_log("step_7_save_assistant_message")
 def step_7_save_assistant_message(state):
     """
@@ -205,18 +247,31 @@ def node_answer_output(state: QueryGraphState):
     if not has_answer:
         # 2.1 获取参数及校验
         reranked_docs, session_id, item_names, rewritten_query, is_stream = step_2_validate_and_get_data(state)
-        # 2.2 读取有效的聊天记录
-        history = step_3_get_history_by_session_id(session_id)
-        # 2.3 拼接提示词
-        answer_prompt: str = step_4_create_answer_prompt(reranked_docs, history, item_names, rewritten_query)
-        # 2.4 调用模型获取answer
-        # 1.流式->push  2.流式|非流式 answer
-        answer: str = step_5_call_llm_create_answer(answer_prompt, is_stream, session_id)
-        # 2.5 提取片段中的图片image_urls
-        image_urls: list[str] = step_6_extract_chunk_and_url_image(reranked_docs)
-        # 2.6 更新state
-        state['answer'] = answer
-        state['image_urls'] = image_urls
+
+        if not reranked_docs:
+            # 2.2 无检索结果 -> 走无资料兜底话术（需求 §6.3），不调用模型
+            logger.info("未检索到任何参考资料,输出无资料兜底话术!")
+            answer = NO_INFO_FALLBACK_ANSWER
+            if is_stream:
+                push_to_session(session_id=session_id, event=SSEEvent.DELTA, data={"delta": answer})
+            state['answer'] = answer
+            state['image_urls'] = []
+            state['references'] = []
+        else:
+            # 2.3 读取有效的聊天记录
+            history = step_3_get_history_by_session_id(session_id)
+            # 2.4 拼接提示词
+            answer_prompt: str = step_4_create_answer_prompt(reranked_docs, history, item_names, rewritten_query)
+            # 2.5 调用模型获取answer（流式->push  2.流式|非流式 answer）
+            answer: str = step_5_call_llm_create_answer(answer_prompt, is_stream, session_id)
+            # 2.6 提取片段中的图片image_urls
+            image_urls: list[str] = step_6_extract_chunk_and_url_image(reranked_docs)
+            # 2.7 构建引用来源
+            references: list[dict] = step_6b_build_references(reranked_docs)
+            # 2.8 更新state
+            state['answer'] = answer
+            state['image_urls'] = image_urls
+            state['references'] = references
 
     # 3、保存聊天记录
     step_7_save_assistant_message(state)

@@ -21,13 +21,12 @@ def step_1_validate_and_get_data(state):
     :param state:
     :return:
     """
-    # 1. 获取参数
-    embedding_chunks = state.get("embedding_chunks")
-    hyde_embedding_chunks = state.get("hyde_embedding_chunks")
-    # 2. 非空校验
-    if (not embedding_chunks) or (not hyde_embedding_chunks):
-        logger.error(f"embedding_chunks或者hyde_embedding_chunks为空,业务无法继续,提前终止!")
-        raise ValueError(f"embedding_chunks或者hyde_embedding_chunks为空,业务无法继续,提前终止!")
+    # 1. 获取参数（允许某一路召回为空，融合时按现有数据处理）
+    embedding_chunks = state.get("embedding_chunks", []) or []
+    hyde_embedding_chunks = state.get("hyde_embedding_chunks", []) or []
+    # 2. 两路都为空时打警告，但不中断（由答案节点走无资料兜底）
+    if not embedding_chunks and not hyde_embedding_chunks:
+        logger.warning("向量检索与HyDE检索均为空,后续将走无资料兜底回答!")
     # 3. 返回结果
     return embedding_chunks, hyde_embedding_chunks
 
