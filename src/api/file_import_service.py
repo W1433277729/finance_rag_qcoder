@@ -148,8 +148,9 @@ async def upload_files(
         # 4. 构建该任务的本地独立目录：out/YYYYMMDD/TaskID，避免多文件重名冲突
         task_output_dir: Path = date_based_root_dir / task_id
         task_output_dir.mkdir(parents=True, exist_ok=True)
-        # 5. 构建上传文件的本地保存绝对路径
-        input_file_path: Path = date_based_root_dir / file.filename
+        # 5. 上传文件存进该任务自己的目录：不同子目录下的同名文件分属不同任务目录，不会互相覆盖；
+        #    只取 Path(...).name 也避免客户端用 "../" 之类的相对路径写到目录之外
+        input_file_path: Path = task_output_dir / Path(file.filename or 'upload.bin').name
 
         # 6. 将上传的文件保存到本地临时目录
         with input_file_path.open('wb') as file_buffer:

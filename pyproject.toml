@@ -33,6 +33,7 @@ dependencies = [
     "openai-agents>=0.4.2",
     "requests>=2.32.5",
     "pytest>=9.1.1",
+    "ragas>=0.4.3",
 ]
 # 全局镜像源配置
 [[tool.uv.index]]

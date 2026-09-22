@@ -73,6 +73,12 @@ def node_web_search_mcp(state: QueryGraphState):
     add_running_task(state["session_id"], sys._getframe().f_code.co_name, state["is_stream"])
     logger.info("---node-web-search-mcp处理---")
 
+    # 0、按需关闭联网搜索（评估/离线场景：外部来源会干扰检索指标，直接跳过）
+    if state.get("disable_web_search"):
+        logger.info("已开启 disable_web_search，跳过联网搜索召回")
+        add_done_task(state["session_id"], sys._getframe().f_code.co_name, state["is_stream"])
+        return {"web_search_docs": []}
+
     # 1、参数获取及校验，返回 已改写的问题
     rewritten_query: str = step_1_validate_and_get_data(state)
     # 2、创建mcp服务，进行工具调用

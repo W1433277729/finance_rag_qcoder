@@ -164,3 +164,11 @@ cython_debug/
 
 /output/
 /doc/
+
+# 运行/评估产生的日志文件（如 eval/reports/*.log）
+*.log
+
+# 评估运行产物与出题草稿：报告含逐题答案与语料片段原文（doc/ 本身不入库，避免间接带进仓库），
+# 且都可由 eval/ 下脚本重新生成；题库与脚本仍然提交。
+/eval/reports/
+/eval/dataset/drafts/

@@ -11,7 +11,7 @@
 - **原始实现域**：硬件产品说明书问答（示例数据曾为 `华为P60`、`HAK180 烫金机`、`万用表RS-12`）。整套流程（主体识别、消歧、答案生成、提示词）都围绕「**商品型号（item_name）**」这一核心实体构建。
 - **目标改造域**：根据 `需求说明.md`（金融知识库项目需求），把系统改造成**面向普通用户的金融知识库查询系统**——支持金融产品、产品说明书、基金招募书、市场资讯、公司公告、政策解读、金融术语、FAQ、业务流程等资料的检索问答。
 
-> ⚠️ 改造的核心难点：金融场景包含大量**无明确产品实体**的查询（如「什么是基金净值？」「基金赎回多久到账？」），而现有流程强依赖 `item_name` 消歧，需重点调整（见第 6 节差距清单）。
+> ⚠️ 金融场景的核心特点：大量查询**没有明确产品实体**（如「什么是基金净值？」「基金赎回多久到账？」）。原流程强依赖 `item_name` 消歧，改造已加入「知识类查询旁路」来承接这类问题（见第 6 节改造进展）。
 
 需求原文位于项目外部：`D:\学习资料\BJ20260615AI\17_尚硅谷大模型项目实战之掌柜智库实战\1.资料\金融\需求说明.md`
 
@@ -25,6 +25,7 @@
 - **Qwen（阿里百炼 / DashScope，OpenAI 兼容接口）** 作为 LLM 与 VL 模型
 - **MongoDB** 存对话历史；**MinIO** 存图片；**MineRU** 做 PDF→Markdown
 - **MCP WebSearch（DashScope）** 做联网搜索召回
+- **RAGAS 0.4**（`eval/`）做 RAG 评估。注意：ragas 0.4.3 会 `import langchain_community.chat_models.vertexai`，而 langchain-community 0.4.x 已删除该模块，因此 `eval/judge.py` 顶部注入了桩模块（见该文件注释，勿删）
 - 日志：**loguru**，统一从 `src.common.logging.logger` 导入
 
 ## 3. 目录结构与职责
@@ -48,6 +49,16 @@ src/
     load_prompt.py path_util.py sse_utils.py task_utils.py rate_limit_utils.py ...
 doc/                         # 待导入资料（已替换为金融语料，按内容类型分子目录，见下）
 tests/                       # pytest 测试
+eval/                        # RAG 评估（与运行时逻辑隔离，只在进程内调用查询流程）
+  kb_inventory.py            # 盘点 KB 实际入库的 file_title 与元数据分布
+  build_dataset.py           # 合并 drafts → questions_v*.jsonl，校验并生成人工评审表
+  judge.py                   # RAGAS 判官层（LLM 工厂 / 指标实例化 / 合规 rubric 加载）
+  run_rag_eval.py            # 主入口：跑查询流程 → 规则断言 → 检索命中 → RAGAS 打分 → 报告
+  report.py                  # 报告聚合与渲染
+  clean_eval_sessions.py     # 清理 eval_ 前缀的 Mongo 会话历史（默认只预览）
+  tracing.py                 # LangFuse 追踪预留接口（对应 --trace）
+  dataset/                   # questions_v1.jsonl + drafts/ + review_questions_v1.md
+  reports/                   # 报告 json/md 与运行日志（*.log 已 gitignore）
 ```
 
 ### doc/ 金融语料（已就位，对应需求 §4 内容导入范围）
@@ -62,7 +73,7 @@ tests/                       # pytest 测试
 | `用户FAQ/` | 常见问题 FAQ | ETF投教问答(.doc)、投资者问答(PDF)、消费者金融素养问卷(PDF)、私募基金投教问答(.docx)|
 | `银行理财&风险揭示书/` | 产品风险揭示书 | 建行/中行/中银理财 风险揭示书（PDF）|
 
-> ⚠️ **格式支持缺口**：`用户FAQ/` 下有 `.doc`、`.docx` 文件，而现有导入流程只支持 **PDF（MineRU 解析）和 MD**（见 `node_pdf_to_md` / `node_md_img`）。改造时需决定是否：转换为 PDF/MD、或新增 Office 文档解析分支。
+> ℹ️ **格式支持**：导入流程只支持 **PDF（MineRU 解析）和 MD**（见 `node_pdf_to_md` / `node_md_img`）。`用户FAQ/` 下的 `.doc` / `.docx`（ETF投教问答、私募基金投教问答）**已决定跳过**，当前 KB 未收录，故 FAQ 类问题只能落在 `投资者问答.pdf` 与 `消费者金融素养问卷调查报告.pdf` 上。
 
 ## 4. 两条工作流
 
@@ -84,9 +95,9 @@ node_item_name_confirm → (route_after_item_confirm)
    └─ 否则并发：node_search_embedding + node_search_embedding_hyde + node_web_search_mcp
 → node_rrf（RRF 融合，k=60）→ node_rerank → node_answer_output → END
 ```
-- `node_item_name_confirm`：改写问题 + 提取 item_names → 向量库匹配真实主体；阈值 `>=0.70` 直接确认，`0.60~0.70` 反问用户选择，否则拒答（写入 `answer`）
-- 多路召回：普通向量、HyDE、联网搜索
-- `node_answer_output`：拼 `answer_out.prompt` → LLM（支持 SSE 流式 delta）→ 抽取图片 URL → 存历史
+- `node_item_name_confirm`：改写问题 + 提取 item_names → 向量库匹配真实主体。三种场景：① 有可信主体（≥0.70）→ 确认并继续检索；② 无可信但有候选（0.60~0.70）→ 写 `answer` 反问用户选择；③ 无可信也无可选 → **清空 item_names，走全库检索**（知识类旁路）
+- 多路召回：普通向量 + HyDE；**联网搜索默认关闭**（`state['disable_web_search']` 默认 `True`，只走向量库检索，保证来源可溯源；需要时置 `False` 恢复 `node_web_search_mcp`）
+- `node_answer_output`：拼 `answer_out.prompt`（结构化输出 + 合规护栏 + 无资料兜底）→ LLM（支持 SSE 流式 delta）→ 抽取图片 URL → 构建 `references` 引用来源 → 存历史
 
 ## 5. 编码约定（务必遵守）
 
@@ -100,21 +111,33 @@ node_item_name_confirm → (route_after_item_confirm)
 - **提示词**：外置为 `.prompt` 文件，通过 `load_prompt` 加载，不要硬编码在 py 里
 - **文件头**：保留 `@Desc / @Time / @Author` 注释块；文件末尾常带 `if __name__ == "__main__":` 单节点/全流程测试
 - **Milvus 幂等**：入库前先按 `file_title == '...'` 删除旧数据再插入（注意 `==` 与字符串转义，见 `escape_milvus_string_utils.py`）
+- **评估（`eval/`）**：走进程内 `query_app.invoke(...)`，不走 HTTP/SSE；每题独立 `session_id=eval_<run>_<题号>` 隔离历史（用完可用 `clean_eval_sessions.py` 清理）；判官固定 `temperature=0`、同一版题库，改完代码重跑同版对比；合规 rubric 外置在 `src/common/prompt/compliance_eval.prompt`
 - **不提交 `.env`**（已 gitignore），只维护 `.env.example`
 
-## 6. 当前实现 vs 金融需求的差距清单（改造重点）
+## 6. 金融域改造进展与遗留
 
-> **本轮改造决策（已与用户确认）**：① 范围＝分阶段，先做**最小问答闭环**；② `doc/用户FAQ` 的 `.doc/.docx` **本轮跳过，只导入 PDF**；③ 金融元数据（content_type/产品名/代码/风险等级等）由 **LLM 自动抽取**。
+> **改造决策（已与用户确认）**：① 范围＝分阶段，先做**最小问答闭环**；② `doc/用户FAQ` 的 `.doc/.docx` **跳过，只导入 PDF**；③ 金融元数据由 **LLM 自动抽取**（`finance_metadata_extract.prompt`，`content_type` 用固定枚举）。
 
-1. **数据 Schema 缺字段**：`kb_chunks` 现仅有 `file_title/item_name/title/parent_title/part/content`。需求 §5 要求补充：`content_type、product_name、product_code、institution_name、risk_level、industry、market、publish_date、entry_name、source_file、source_path`。需同步改 schema、切分/识别节点、检索 `output_fields`。
-2. **item_name 语义**：现指「商品型号」，金融域应映射到「产品名称/产品代码/机构」。`product_recognition_system.prompt`（现为"你是商品识别专家"）、`item_name_recognition.prompt` 需改为金融主体识别。
-3. **无产品实体的查询被拦截**：`node_item_name_confirm` 在无法确认 item_name 时直接写 `answer` 拒答/反问。金融知识、术语、FAQ、业务流程类问题（如「什么是净值型理财」）**没有具体产品**，需增加「知识/概念类查询」旁路，允许无 item_name 时正常走检索问答。
-4. **答案结构**：`answer_out.prompt` 现为产品说明书 + 图片导向。需求 §6 要求结构化输出（简要结论/主要内容/风险提示/注意事项/引用来源），§6.2 引用来源，§6.3 无资料时的固定兜底话术。
-5. **合规护栏缺失**：需求 §7 要求——不提供投资建议、不承诺收益（禁用"保本/稳赚不赔"等）、风险提示谨慎、不保证实时性。需在提示词与后处理中加入合规约束。
-6. **引用来源未回传**：查询响应目前只返回 `answer` + `image_urls`，需增加来源信息字段（资料名称/内容类型/产品名/发布时间/来源文件）。
-7. **图片相关逻辑**（`node_md_img`、`step_6_extract_chunk_and_url_image`）在金融文档场景可能弱化，按需保留。
-8. **导入格式仅支持 PDF/MD**：`doc/用户FAQ/` 含 `.doc/.docx`，现流程无法解析；且 `content_type` 等金融元数据目前无从自动填充（可考虑按 `doc/` 子目录名推断，或在导入接口/识别节点中补全）。
-9. **失效的测试入口**：`import_processor/main_graph.py`、`node_document_split.py` 等文件的 `if __name__ == "__main__":` 测试块仍硬编码引用已删除的 `hak180产品安全手册.pdf` / `万用表RS-12的使用.pdf`，改造后需替换为 `doc/` 下的金融语料。
+### 已完成
+1. **Schema 扩展**：`kb_chunks` 增加 `content_type/product_name/product_code/institution_name/risk_level/industry/market/publish_date/entry_name/source_file/source_path`；检索侧 `output_fields` 同步（`src/utils/clients/milvus_utils.py` 的 `CHUNK_OUTPUT_FIELDS`）。
+2. **金融主体识别**：`node_item_recognition` 用 LLM 抽取 `item_name` 与金融元数据（上下文取前 7 个 chunk）；`item_name_recognition.prompt` / `product_recognition_system.prompt` 已改为金融主体识别。
+3. **知识类旁路**：`node_item_name_confirm` 场景 ③ 清空 `item_names` 走全库检索，不再一律拒答/反问。
+4. **结构化答案 + 合规护栏 + 兜底**：`answer_out.prompt` 输出【简要结论/主要内容/风险提示/注意事项】+【引用来源】，无资料时输出固定兜底话术「当前知识库中未检索到足够信息…」。
+5. **引用来源回传**：查询响应新增 `references`（资料名/内容类型/产品名/机构/发布时间/来源文件）。
+6. **导入页多文件排队**：`src/page/import.html` 支持多文件/文件夹勾选、串行排队（`MAX_CONCURRENCY=1`）、上传与处理逐文件真实进度 + 顶部总进度；`.doc/.docx` 标注「不支持」且默认不勾选；同名文件有「重名」提醒。
+7. **磁盘层同名覆盖已修**：`/upload` 把上传文件存进 `output/<日期>/<task_id>/`，不同子目录同名文件不再互相覆盖。
+
+### 遗留
+1. **Milvus 层同名覆盖**：入库仍按 `file_title`（=文件名主干）先删后插，不同子目录同主名资料会互相覆盖；目前靠导入页的「重名」提醒规避，未彻底修复。
+2. **评估指标**：`answer_relevancy` 已接入（`eval/embeddings.py` 把本地 BGE-M3 包成 ragas embeddings）；`answer_correctness` 与 `factual_correctness` 语义重叠，默认关闭，需要时用 `--metrics` 显式指定。
+3. **LangFuse 追踪**：仅留接入点（`eval/tracing.py` + `--trace`），未安装依赖。
+4. **图片逻辑**（`node_md_img`、`step_6_extract_chunk_and_url_image`）在金融文档场景基本不产出图片，保留未删。
+5. **部分节点 `__main__` 测试块**仍引用已删除的硬件 PDF，需要时替换为 `doc/` 下语料。
+6. **规则断言的局限**：`must_have`/`must_not` 是字面匹配（数字已支持千分位与单位换算），识别不了否定式表达；带否定语义的合规判断依赖合规 rubric 的 LLM 评分。
+7. **报表/表格类切片召回不到（2026-09-22 评估定位）**：年报里的财务报表被切成原始 HTML 表格堆（`<td>`/`colspan=`），交叉编码器给这类切片极低分（含「合并净利润 38,048百万元」的切片只 0.117，排最后），断崖截断后不会进上下文 —— 于是「一季度净利润多少」这类问题会漏项或误取母公司口径（33,769）。实测放宽候选池到 limit=10 无效（该切片进池但仍排末位）、调大 `RERANK_MIN_TOPK` 也无用（徒增噪声）。根治要改**导入侧**：把 HTML 表格清洗成结构化文本（每行「指标名+本期/上期/同比」）、让单个指标行可被独立检索，代价是需要重新导入年报语料。**当前决定：暂不修**，题库中 `report-04` 已标记 `known_issue` 保留作对照。
+
+### 评估基线（2026-09-22，43 题，判官 qwen-flash，联网搜索关闭）
+检索标准来源命中率 37/41（90%）｜上下文精确率 0.84｜上下文召回率 0.85｜忠实度 0.70｜事实正确性 0.49｜合规 rubric 0.94（5 条归一化）。报告见 `eval/reports/`（题库 `eval/dataset/questions_v1.jsonl`）。
 
 ## 7. 运行方式
 
@@ -136,6 +159,13 @@ uv run python -m src.processor.import_processor.main_graph
 
 # 测试
 uv run pytest
+
+# RAG 评估（题库见 eval/dataset/questions_v1.jsonl，评测时联网搜索自动关闭）
+uv run python -m eval.kb_inventory                            # 盘点 KB 实际入库内容
+uv run python -m eval.build_dataset --from-jsonl              # 校验题库并重建人工评审表
+uv run python -m eval.run_rag_eval --limit 3 --metrics none    # 冒烟：只跑规则断言 + 检索命中
+uv run python -m eval.run_rag_eval --tag full_v1               # 全量：含 RAGAS 判官打分
+uv run python -m eval.clean_eval_sessions                      # 预览评估会话历史，加 --yes 执行删除
 ```
 
 **依赖的外部服务**：Milvus(19530)、MongoDB(27017)、MinIO(9000)、可访问的 DashScope/百炼 API、本地已下载的 BGE-M3 与 bge-reranker-large 模型。
@@ -146,5 +176,6 @@ uv run pytest
 
 ## 9. 其它约定
 
-- `.gitignore` 已忽略 `/output/` 与 `/doc/`——`doc/` 下的金融语料 PDF **不纳入 git**，属本地资料。
+- `.gitignore` 已忽略 `/output/`、`/doc/`、`*.log`、`/eval/reports/`、`/eval/dataset/drafts/`——`doc/` 下的金融语料 PDF **不纳入 git**，属本地资料。
 - 环境变量文件 `.env` 已存在且配置完整（勿提交，勿打印其中密钥）。
+- **评估相关的提交边界**：提交 `eval/*.py` 与冻结题库 `eval/dataset/questions_v1.jsonl`（+可选的评审表 md）；**不提交** `eval/reports/`（报告含逐题答案与语料片段原文，且可重新生成）与 `eval/dataset/drafts/`（出题草稿，已被冻结题库取代）。评估基线数字记在第 6 节，作为版本对比依据。

@@ -18,6 +18,9 @@ from src.utils.task_utils import add_running_task, add_done_task
 # 动态 TopK 硬上限：最多取前 N 条（<=10）
 RERANK_MAX_TOPK: int = 10
 # 最小 TopK：至少保留前 N 条（>=1，且 <= RERANK_MAX_TOPK）
+# 说明：曾试过调大该值（5）来救「关键数字落在报表表格切片、被断崖截断砍掉」的问题，
+# 实测无效——这类切片在交叉编码器里排倒数（0.12 左右），调大只是徒增上下文噪声。
+# 表格类召回问题见 AGENTS.md 第 6 节遗留项，根治要改导入侧的表结构处理。
 RERANK_MIN_TOPK: int = 1
 # 断崖阈值（相对）
 RERANK_GAP_RATIO: float = 0.25
@@ -144,6 +147,38 @@ def step_5_dynamic_topk(merged_list):
     return reranked_docs
 
 
+@step_log("step_6_ensure_entity_coverage")
+def step_6_ensure_entity_coverage(reranked_docs: list[dict], merged_list: list[dict],
+                                 item_names: list[str]) -> list[dict]:
+    """
+      多主体覆盖补齐：
+      动态 TopK 的「断崖截断」在比较类问题上会把某个主体的片段整体砍掉
+      （例如「平安银行和招商银行谁更稳」只留了平安银行，答案就无法对比、只能走兜底）。
+      这里对每个已确认主体，若最终结果里没有它的片段，补入其在合并列表中得分最高的一条。
+    :param reranked_docs: 断崖截断后的最终片段
+    :param merged_list: 重排打分后的完整列表（已按分数降序）
+    :param item_names: 已确认的金融主体
+    """
+    if not item_names:
+        return reranked_docs
+    kept_ids = {doc.get('chunk_id') for doc in reranked_docs}
+    covered = {doc.get('item_name') for doc in reranked_docs}
+    added: list[dict] = []
+    for item_name in item_names:
+        if item_name in covered:
+            continue
+        best = next((doc for doc in merged_list
+                     if doc.get('item_name') == item_name and doc.get('chunk_id') not in kept_ids), None)
+        if best:
+            added.append(best)
+            kept_ids.add(best.get('chunk_id'))
+            logger.info(f"主体[{item_name}]在断崖截断后没有片段,补入其得分最高的一条:{best.get('title')}")
+    if not added:
+        return reranked_docs
+    logger.info(f"多主体覆盖补齐:{len(added)} 条,补齐后片段总数:{len(reranked_docs) + len(added)}")
+    return reranked_docs + added
+
+
 @node_log("node_rerank")
 def node_rerank(state: QueryGraphState):
     """
@@ -163,6 +198,8 @@ def node_rerank(state: QueryGraphState):
     step_4_list_score_and_rank(merged_list, question_answer_pair)
     # 5、进行动态内容截取
     reranked_docs = step_5_dynamic_topk(merged_list)
+    # 5b、多主体覆盖补齐（比较类问题不能只留一侧主体）
+    reranked_docs = step_6_ensure_entity_coverage(reranked_docs, merged_list, state.get('item_names') or [])
     # 6、状态更新
     state["reranked_docs"] = reranked_docs
 

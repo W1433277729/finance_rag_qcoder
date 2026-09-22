@@ -31,6 +31,11 @@ ITEM_NAME_CANDIDATE_THRESHOLD = 0.60
 # 给用户选择时，最多展示几个候选
 ITEM_NAME_OPTIONS_TOPK = 2
 ITEM_NAME_CONFIRMED_TOPK = 1
+# 反问前的字面关联阈值：候选主体与模型提取的主体，中文字符重合率低于该值则不反问
+# 目的：向量相似度落在候选区间 ≠ 用户问的就是库里这个产品。用户问的东西库里根本没有时
+# （如「建行利得盈2013年第17期」），应走全库检索 + 无资料兜底（需求 §6.3），
+# 而不是把无关候选抛给用户，那会让人误以为该产品在库中。
+ITEM_NAME_OPTION_LITERAL_OVERLAP = 0.5
 
 
 @step_log("step_1_validate_and_get_data")
@@ -205,6 +210,29 @@ def step_4_select_item_names_milvus(item_names: list[str]):
     return milvus_search_result
 
 
+def _literal_overlap(probe: str, text: str) -> bool:
+    """
+    判断 probe 的字符有多大比例出现在 text 中（默认阈值 0.5），用于两道护栏：
+    1) 反问护栏：候选主体是否与模型提取的主体字面相关（probe=提取名，text=候选）
+    2) 主体护栏：匹配到的主体是否真的出现在用户问题/历史里（probe=主体，text=问题+历史）
+    优先按中文汉字比对（避免数字/字母造成虚假重合，如「第17期」与「07期」共享 0/7/期），
+    双方都无中文时退化为非空白字符比对。
+    :return: True 表示字面相关；False 表示无关（大概率是模型臆测）
+    """
+    def char_set(value: str, cjk_only: bool) -> set[str]:
+        value = str(value or '')
+        if cjk_only:
+            return {ch for ch in value if '\u4e00' <= ch <= '\u9fff'}
+        return {ch for ch in value if not ch.isspace()}
+
+    probe_cjk, text_cjk = char_set(probe, True), char_set(text, True)
+    probe_chars, text_chars = (probe_cjk, text_cjk) if (probe_cjk and text_cjk) \
+        else (char_set(probe, False), char_set(text, False))
+    if not probe_chars or not text_chars:
+        return False
+    return len(probe_chars & text_chars) / len(probe_chars) >= ITEM_NAME_OPTION_LITERAL_OVERLAP
+
+
 @step_log("step_5_select_confirmed_and_option_item_names")
 def step_5_select_confirmed_and_option_item_names(search_result: dict[str, list[dict]]):
     """
@@ -226,8 +254,14 @@ def step_5_select_confirmed_and_option_item_names(search_result: dict[str, list[
             logger.info(f"{item_name}已经获取到可信的主体:{high_list[:ITEM_NAME_CONFIRMED_TOPK]}")
             continue
         if middle_list:
-            option_list.extend(middle_list[:ITEM_NAME_OPTIONS_TOPK])
-            logger.info(f"{item_name}没有可信的主体,但是有可选的主体:{middle_list[:ITEM_NAME_OPTIONS_TOPK]}")
+            # 候选必须与问题主体有明显字面关联，否则视为「库外问题」，交给全库检索走兜底
+            related_list = [candidate for candidate in middle_list if _literal_overlap(item_name, candidate)]
+            if related_list:
+                option_list.extend(related_list[:ITEM_NAME_OPTIONS_TOPK])
+                logger.info(f"{item_name}没有可信的主体,但是有可选的主体:{related_list[:ITEM_NAME_OPTIONS_TOPK]}")
+            else:
+                logger.info(f"{item_name}的候选与问题主体无明显字面关联,判定为知识库外问题,"
+                            f"不反问用户,改走全库检索/无资料兜底;候选={middle_list}")
 
     return {
         "confirmed": confirmed_list,  # expr item_name in [名字,名字]
@@ -236,16 +270,15 @@ def step_5_select_confirmed_and_option_item_names(search_result: dict[str, list[
 
 
 @step_log("step_6_change_state_property")
-def step_6_change_state_property(state: QueryGraphState, rewritten_query, confirmed_option_dict):
+def step_6_change_state_property(state: QueryGraphState, rewritten_query, confirmed_option_dict,
+                                 history_text: str = ""):
     """
     更新state
       场景1: 有可信主体 -> item_names + rewritten_query,继续检索(不写answer)
       场景2: 无可信但有可选主体 -> 写answer反问用户澄清
       场景3: 无可信也无可选(知识/概念类问题,或产品未匹配) -> item_names置空,
              仅保留rewritten_query,走「无主体过滤」的全库检索(不写answer)
-    :param state:
-    :param rewritten_query:
-    :param confirmed_option_dict:
+    :param history_text: 历史对话文本，用于校验主体是否真的在上下文里出现过
     :return:
     """
     confirmed_list = confirmed_option_dict.get("confirmed", [])
@@ -253,6 +286,17 @@ def step_6_change_state_property(state: QueryGraphState, rewritten_query, confir
 
     # 无论哪种场景,都保留改写后的问题供后续检索使用(空则回退原始问题)
     state['rewritten_query'] = rewritten_query or state.get('original_query')
+
+    # 主体护栏：匹配到的主体必须真的出现在用户问题或历史里，否则视为模型臆测并丢弃。
+    # 典型反例：「报告里说科技贷款、绿色贷款…」被抽成 ['私募基金','平安银行']，
+    # 一旦按主体过滤检索，真正该查的《中国货币政策执行报告》反而不会被检索到。
+    context_text = f"{state.get('original_query') or ''} {history_text or ''}"
+    if confirmed_list or option_list:
+        dropped = [name for name in confirmed_list + option_list if not _literal_overlap(name, context_text)]
+        if dropped:
+            logger.info(f"主体未出现在问题/历史中,判定为模型臆测并丢弃:{dropped}")
+            confirmed_list = [name for name in confirmed_list if name not in dropped]
+            option_list = [name for name in option_list if name not in dropped]
 
     if confirmed_list:
         # 场景1: 有可信主体
@@ -312,7 +356,11 @@ def node_item_name_confirm(state: QueryGraphState):
         confirmed_option_dict: dict[str, list[str]] = step_5_select_confirmed_and_option_item_names(search_result)
     # 6. 根据确认和可选列表存在性修改state
     # state -> item_names 可信确定 rewritten_query || 可选 answer || 没有可选  answer
-    step_6_change_state_property(state, llm_dict.get("rewritten_query"), confirmed_option_dict)
+    # history_text 用于校验主体是否真的在上下文出现过（多轮追问时主体可能只在历史里）
+    history_text = ' '.join(
+        f"{item.get('text', '')} {item.get('rewritten_query', '')}" for item in history_list
+    )
+    step_6_change_state_property(state, llm_dict.get("rewritten_query"), confirmed_option_dict, history_text)
     # #  7. 写入历史聊天记录(用户提问)
     step_7_save_user_chat_message(state)
 

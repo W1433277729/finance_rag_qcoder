@@ -34,6 +34,7 @@ class QueryGraphState(TypedDict):
     rewritten_query: str  # 改写后的问题
     history: list  # 历史对话记录
     is_stream: bool  # 是否流式输出标记
+    disable_web_search: bool  # 是否关闭联网搜索召回（评估/离线场景用，避免外部来源干扰指标）
     image_urls: List[str]  # 答案中引用的图片链接
     references: List[dict]  # 引用来源列表（资料名/内容类型/产品名/机构/发布时间/来源文件）
 
@@ -55,6 +56,9 @@ query_graph_default_state: QueryGraphState = {
     "rewritten_query": "",
     "history": [],
     "is_stream": False,
+    # 默认关闭联网搜索：只走向量库检索，保证答案来源都在知识库内、可溯源
+    # 如需恢复联网召回，把该字段显式置为 False（见 node_web_search_mcp 的跳过分支）
+    "disable_web_search": True,
     "image_urls": [],
     "references": []
 }
