@@ -36,17 +36,21 @@ def _fmt(value) -> str:
     return '—' if value is None else str(value)
 
 
-def _metric_value(record: dict, name: str, scale: float = 1.0):
-    """取指标分值；合规 rubric 是多条之和的标度，按 rubric 条数归一化到 0~1。"""
+# 部分指标的原始标度不是 0~1，报告里统一转换到 0~1 后再展示
+_VALUE_TRANSFORMS = {
+    # DomainSpecificRubrics（合规 rubric）返回的是 1~5 分：1=完全错误 … 5=完全正确。
+    # 判官偶尔会越界返回 0 或 >5，这里对结果做钳制，避免出现负分或 >1 的均值。
+    'compliance': lambda v: round(min(1.0, max(0.0, (v - 1) / 4)), 3),
+}
+
+
+def _metric_value(record: dict, name: str):
+    """取指标分值，并按指标自身标度转换到 0~1。"""
     value = (record.get('scores') or {}).get(name, {}).get('value')
-    if isinstance(value, (int, float)) and scale and scale != 1.0:
-        return round(value / scale, 3)
+    transform = _VALUE_TRANSFORMS.get(name)
+    if transform and isinstance(value, (int, float)):
+        return transform(value)
     return value
-
-
-def _scales(meta: dict) -> dict:
-    count = meta.get('compliance_rubric_count') or 1
-    return {'compliance': count}
 
 
 def _rate(records: list[dict], predicate) -> str:
@@ -58,9 +62,7 @@ def _rate(records: list[dict], predicate) -> str:
     return f'{passed}/{len(applicable)}（{round(passed / len(applicable) * 100)}%）'
 
 
-def _group_rows(records: list[dict], metric_names: list[str], key: str, labels: dict,
-                scales: dict | None = None) -> list[str]:
-    scales = scales or {}
+def _group_rows(records: list[dict], metric_names: list[str], key: str, labels: dict) -> list[str]:
     rows = ['| 分组 | 题数 | 检索命中 | 平均 recall | 平均 MRR | ' + ' | '.join(
         METRIC_LABELS.get(m, m) for m in metric_names) + ' |',
         '| --- | --- | --- | --- | --- | ' + ' | '.join('---' for _ in metric_names) + ' |']
@@ -71,16 +73,14 @@ def _group_rows(records: list[dict], metric_names: list[str], key: str, labels: 
         hit = _rate(subset, lambda r: r.get('retrieval', {}).get('gold_hit')) if with_gold else '—'
         recall = _mean([r['retrieval']['recall'] for r in with_gold])
         mrr = _mean([r['retrieval']['mrr'] for r in with_gold])
-        metric_cells = [_fmt(_mean([_metric_value(r, m, scales.get(m, 1.0)) for r in subset]))
-                        for m in metric_names]
+        metric_cells = [_fmt(_mean([_metric_value(r, m) for r in subset])) for m in metric_names]
         rows.append(f'| {labels.get(group, group)} | {len(subset)} | {hit} | {_fmt(recall)} | {_fmt(mrr)} | '
                     + ' | '.join(metric_cells) + ' |')
     return rows
 
 
-def _collect_issues(records: list[dict], metric_names: list[str], scales: dict | None = None) -> list[str]:
+def _collect_issues(records: list[dict], metric_names: list[str]) -> list[str]:
     """列出需要人工看的题：断言失败、检索未命中、指标低分或异常。"""
-    scales = scales or {}
     lines: list[str] = []
     for r in records:
         reasons: list[str] = []
@@ -102,7 +102,7 @@ def _collect_issues(records: list[dict], metric_names: list[str], scales: dict |
             pre = r.get('retrieval_pre_rerank', {}).get('gold_hit')
             reasons.append(f'检索未命中标准来源（RRF 阶段{"命中" if pre else "未命中"}）')
         for name in metric_names:
-            score = _metric_value(r, name, scales.get(name, 1.0))
+            score = _metric_value(r, name)
             if score is not None and score < LOW_SCORE:
                 reasons.append(f'{METRIC_LABELS.get(name, name)}={score}')
             elif score is None and (r.get('scores') or {}).get(name, {}).get('error'):
@@ -119,7 +119,6 @@ def _collect_issues(records: list[dict], metric_names: list[str], scales: dict |
 
 def build_report(meta: dict, records: list[dict], out_path: Path) -> Path:
     metric_names = meta.get('metrics') or []
-    scales = _scales(meta)
     lines: list[str] = [f'# RAG 评估报告 {meta["run_id"]}', '']
     lines.append('| 项 | 值 |')
     lines.append('| --- | --- |')
@@ -151,7 +150,7 @@ def build_report(meta: dict, records: list[dict], out_path: Path) -> Path:
     lines.append('| --- | --- |')
     for name in metric_names:
         lines.append(f'| {METRIC_LABELS.get(name, name)} 均值 | '
-                     f'{_fmt(_mean([_metric_value(r, name, scales.get(name, 1.0)) for r in records]))} |')
+                     f'{_fmt(_mean([_metric_value(r, name) for r in records]))} |')
     lines.append(f'| 无违规词通过率 | {_rate(records, lambda r: not r.get("rules", {}).get("must_not_violations"))} |')
     lines.append(f'| 关键词齐全通过率 | {_rate(records, lambda r: not r.get("rules", {}).get("must_have_missing"))} |')
     lines.append(f'| 兜底判断正确率 | {_rate(records, lambda r: r.get("rules", {}).get("fallback_ok"))} |')
@@ -164,18 +163,18 @@ def build_report(meta: dict, records: list[dict], out_path: Path) -> Path:
     lines.append('')
     lines.append('### 2.1 按内容类别')
     lines.append('')
-    lines.extend(_group_rows(records, metric_names, 'category', {}, scales))
+    lines.extend(_group_rows(records, metric_names, 'category', {}))
     lines.append('')
     lines.append('### 2.2 按查询路径')
     lines.append('')
-    lines.extend(_group_rows(records, metric_names, 'branch', BRANCH_LABELS, scales))
+    lines.extend(_group_rows(records, metric_names, 'branch', BRANCH_LABELS))
     lines.append('')
 
     lines.append('## 3. 需要人工复核的题')
     lines.append('')
     lines.append(f'（触发条件：命中违规词 / 缺关键词 / 兜底判断错 / references 异常 / 检索未命中 / 指标 < {LOW_SCORE} / 流程异常）')
     lines.append('')
-    lines.extend(_collect_issues(records, metric_names, scales))
+    lines.extend(_collect_issues(records, metric_names))
     lines.append('')
 
     lines.append('## 4. 检索环节诊断')

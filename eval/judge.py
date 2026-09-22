@@ -37,16 +37,12 @@ def get_judge_llm():
 def load_compliance_rubrics() -> dict[str, str]:
     """
     加载合规 rubric（src/common/prompt/compliance_eval.prompt，JSON 格式）。
-    以 _ 开头的键视为注释，不参与评分。
+    注意：RAGAS 的 DomainSpecificRubrics 让判官按这些 rubric 给一个 **1~5** 的整体分，
+    不是「每条 rubric 0/1 求和」；报告里按 (v-1)/4 转换到 0~1（见 eval/report.py）。
     """
     raw = load_prompt('compliance_eval')
     rubrics = json.loads(raw)
     return {k: v for k, v in rubrics.items() if not k.startswith('_')}
-
-
-def compliance_rubric_count() -> int:
-    """合规 rubric 条数。DomainSpecificRubrics 返回的是各条之和（0~条数），报告里要按此归一化。"""
-    return len(load_compliance_rubrics())
 
 
 def build_metrics(metric_names: list[str], llm=None) -> dict[str, object]:

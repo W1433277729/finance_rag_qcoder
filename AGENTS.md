@@ -21,7 +21,7 @@
 - **LangGraph** 编排工作流，**LangChain** 封装 LLM 调用链
 - **FastAPI** + uvicorn 提供 HTTP/SSE 接口
 - **Milvus** 向量库：稠密（HNSW/COSINE）+ 稀疏（SPARSE_INVERTED_INDEX/IP）**混合检索**
-- **BGE-M3** 生成稠密+稀疏向量；**bge-reranker-large** 重排序（本地模型，`BGE_DEVICE=cpu`）
+- **BGE-M3** 生成稠密+稀疏向量；**bge-reranker-v2-m3** 重排序（本地模型，`BGE_DEVICE=cpu`；环境变量名沿用 `BGE_RERANKER_LARGE`）
 - **Qwen（阿里百炼 / DashScope，OpenAI 兼容接口）** 作为 LLM 与 VL 模型
 - **MongoDB** 存对话历史；**MinIO** 存图片；**MineRU** 做 PDF→Markdown
 - **MCP WebSearch（DashScope）** 做联网搜索召回
@@ -111,7 +111,8 @@ node_item_name_confirm → (route_after_item_confirm)
 - **提示词**：外置为 `.prompt` 文件，通过 `load_prompt` 加载，不要硬编码在 py 里
 - **文件头**：保留 `@Desc / @Time / @Author` 注释块；文件末尾常带 `if __name__ == "__main__":` 单节点/全流程测试
 - **Milvus 幂等**：入库前先按 `file_title == '...'` 删除旧数据再插入（注意 `==` 与字符串转义，见 `escape_milvus_string_utils.py`）
-- **评估（`eval/`）**：走进程内 `query_app.invoke(...)`，不走 HTTP/SSE；每题独立 `session_id=eval_<run>_<题号>` 隔离历史（用完可用 `clean_eval_sessions.py` 清理）；判官固定 `temperature=0`、同一版题库，改完代码重跑同版对比；合规 rubric 外置在 `src/common/prompt/compliance_eval.prompt`
+- **评估（`eval/`）**：走进程内 `query_app.invoke(...)`，不走 HTTP/SSE；每题独立 `session_id=eval_<run>_<题号>` 隔离历史（用完可用 `clean_eval_sessions.py` 清理）；判官固定 `temperature=0`、同一版题库，改完代码重跑同版对比；合规 rubric 外置在 `src/common/prompt/compliance_eval.prompt`（判官按 rubric 给 **1~5 分**，报告里按 `(v-1)/4` 归一到 0~1）
+- **判官模型**：优先级 `EVAL_JUDGE_*` > `MIMO_*`（小米 MiMo，OpenAI 兼容）> `LLM_DEFAULT_MODEL`。注意 `factual_correctness` 在 mimo-v2.6-flash 上很不稳定（同一对近乎相同的答案/参考，5 次里 4 次给 0），该指标只看趋势、不要当精确值用
 - **不提交 `.env`**（已 gitignore），只维护 `.env.example`
 
 ## 6. 金融域改造进展与遗留
@@ -133,11 +134,24 @@ node_item_name_confirm → (route_after_item_confirm)
 3. **LangFuse 追踪**：仅留接入点（`eval/tracing.py` + `--trace`），未安装依赖。
 4. **图片逻辑**（`node_md_img`、`step_6_extract_chunk_and_url_image`）在金融文档场景基本不产出图片，保留未删。
 5. **部分节点 `__main__` 测试块**仍引用已删除的硬件 PDF，需要时替换为 `doc/` 下语料。
-6. **规则断言的局限**：`must_have`/`must_not` 是字面匹配（数字已支持千分位与单位换算），识别不了否定式表达；带否定语义的合规判断依赖合规 rubric 的 LLM 评分。
+6. **规则断言的边界**：`must_have`/`must_not` 仍是字面匹配 —— 数字已支持千分位与单位换算、`must_not` 已支持否定式排除（「不保本」不算违规）、兜底判定已改为「整体兜底」（答完正文、末尾仅补一句无资料提示不算兜底）；但同义改写仍可能漏判，带语义的合规判断以合规 rubric 的 LLM 评分为准。
 7. **报表/表格类切片召回不到（2026-09-22 评估定位）**：年报里的财务报表被切成原始 HTML 表格堆（`<td>`/`colspan=`），交叉编码器给这类切片极低分（含「合并净利润 38,048百万元」的切片只 0.117，排最后），断崖截断后不会进上下文 —— 于是「一季度净利润多少」这类问题会漏项或误取母公司口径（33,769）。实测放宽候选池到 limit=10 无效（该切片进池但仍排末位）、调大 `RERANK_MIN_TOPK` 也无用（徒增噪声）。根治要改**导入侧**：把 HTML 表格清洗成结构化文本（每行「指标名+本期/上期/同比」）、让单个指标行可被独立检索，代价是需要重新导入年报语料。**当前决定：暂不修**，题库中 `report-04` 已标记 `known_issue` 保留作对照。
 
-### 评估基线（2026-09-22，43 题，判官 qwen-flash，联网搜索关闭）
-检索标准来源命中率 37/41（90%）｜上下文精确率 0.84｜上下文召回率 0.85｜忠实度 0.70｜事实正确性 0.49｜合规 rubric 0.94（5 条归一化）。报告见 `eval/reports/`（题库 `eval/dataset/questions_v1.jsonl`）。
+### 评估基线（判官 qwen-flash、温度 0、联网搜索关闭、同版题库 43 题，可逐项对比）
+| 指标 | v1（改造后首轮） | v2（修复后） |
+| --- | --- | --- |
+| 标准来源命中率 / recall / MRR | 37/41（90%）｜0.89｜0.902 | **41/41（100%）｜1.0｜1.0** |
+| 忠实度 | 0.696 | **0.767** |
+| 答案相关性 | —（当时未接入） | 0.723 |
+| 上下文精确率 / 召回率 | 0.84｜0.85 | **0.90｜0.895** |
+| 事实正确性 | 0.489 | 0.563 |
+| 合规 rubric（(v-1)/4 归一） | 0.930 | **0.983** |
+| 无违规词 / 关键词齐全 / 兜底判断 | 39/43｜33/43｜39/43 | **43/43｜39/43｜43/43** |
+| references 非空 / 覆盖标准来源 | 40/43｜37/41 | **43/43｜41/41** |
+| 反问答疑触发 | 3 | **0** |
+
+- v2 主要对应这几处修复：主体护栏（臆测主体丢弃 3 次）、多主体覆盖补齐（1 次）、兜底话术原样输出、联网搜索全局关闭、断言层放宽（数字单位无关 + 否定式 must_not + 整体兜底判定）。
+- **口径提醒**：两题 `expect_fallback` 的题（faq-03/kb-08）输出的是兜底话术，其上下文/忠实度类指标天然为 0，会拉低均值；看分组均值时留意。更换判官模型后不可与旧基线逐项对比，只能看趋势；每次运行的判官模型记录在报告 meta 里。
 
 ## 7. 运行方式
 

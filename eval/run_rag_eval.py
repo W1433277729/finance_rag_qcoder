@@ -25,7 +25,7 @@ from eval.config import (
     DATASET_PATH, DEFAULT_METRICS, FALLBACK_MARKERS, JUDGE_CONCURRENCY,
     JUDGE_MODEL, REPORT_DIR, SLOW_QUERY_SECONDS,
 )
-from eval.judge import build_metrics, compliance_rubric_count
+from eval.judge import build_metrics
 from eval.report import build_report
 from eval.tracing import build_trace_callbacks
 
@@ -178,14 +178,54 @@ def classify_branch(final_state: dict) -> str:
     return 'clarify'
 
 
+# must_not 命中时的否定词：出现即视为「否定式表述」，不算违规
+# （例如 must_not 含「保本」时，答案里的「不保本」「非保本浮动收益型」是正确表述，不应判违规）
+_NEGATION_CHARS = ('不', '非', '无', '未', '没', '免')
+_NEGATION_WINDOW = 3
+
+
+def keyword_violated(answer: str, keyword: str) -> bool:
+    """
+    判定答案是否**实质违反** must_not 关键词：命中关键词时再看它前面几个字符，
+    若紧邻否定词则视为否定式表述（如「不保本」），不计违规。
+    """
+    normalized_answer = normalize_for_match(answer)
+    normalized_keyword = normalize_for_match(keyword)
+    if not normalized_keyword:
+        return False
+    start = 0
+    while True:
+        index = normalized_answer.find(normalized_keyword, start)
+        if index < 0:
+            return False
+        prefix = normalized_answer[max(0, index - _NEGATION_WINDOW):index]
+        if not any(char in prefix for char in _NEGATION_CHARS):
+            return True
+        start = index + len(normalized_keyword)
+
+
+def is_overall_fallback(answer: str) -> bool:
+    """
+    判定答案是否「整体走了兜底」：兜底话术出现在开头，或答案本身很短（只有那句话）。
+    避免把「答完正文、末尾仅在注意事项里补一句无资料提示」误判为整体兜底。
+    """
+    stripped = (answer or '').strip()
+    if any(stripped.startswith(marker) for marker in FALLBACK_MARKERS):
+        return True
+    if len(stripped) < 250 and any(marker in stripped for marker in FALLBACK_MARKERS):
+        return True
+    return False
+
+
 def evaluate_rules(question: dict, final_state: dict, docs: list[dict], refs: list[dict]) -> dict:
     """确定性断言：不花 LLM 成本，先看合规护栏与来源回传是否真的生效。"""
     answer = final_state.get('answer') or ''
     gold = set(question.get('gold_sources') or [])
-    # must_have 支持「数字+单位」按数值比较（百万元/亿元等价），must_not 走归一化子串
+    # must_have 支持「数字+单位」按数值比较（百万元/亿元等价）
     missing = [k for k in question.get('must_have') or [] if not keyword_hit(answer, k)]
-    violations = [k for k in question.get('must_not') or [] if normalize_for_match(k) in normalize_for_match(answer)]
-    hit_fallback = any(marker in answer for marker in FALLBACK_MARKERS)
+    # must_not 命中后做否定式排除（不保本 / 非保本 等正确表述不计违规）
+    violations = [k for k in question.get('must_not') or [] if keyword_violated(answer, k)]
+    hit_fallback = is_overall_fallback(answer)
     return {
         'must_have_missing': missing,
         'must_not_violations': violations,
@@ -329,8 +369,6 @@ def main() -> None:
         'metrics': metric_names,
         'questions': len(records),
         'web_search': 'disabled',
-        # 合规 rubric 是「多条之和」的标度，报告按此归一化到 0~1
-        'compliance_rubric_count': compliance_rubric_count() if 'compliance' in metric_names else None,
         'trace': 'langfuse' if args.trace else 'off',
         'created_at': datetime.now().isoformat(timespec='seconds'),
     }
