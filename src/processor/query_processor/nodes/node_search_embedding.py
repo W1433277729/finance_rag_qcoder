@@ -14,49 +14,55 @@ from src.utils.lm.embedding_utils import generate_embeddings
 from src.utils.task_utils import add_done_task, add_running_task
 
 
+# 过滤后召回不足该条数时，自动去掉过滤重试一次（避免过滤过狠把召回打成空）
+RETRIEVAL_MIN_HITS = 3
+
+
 @step_log("step_1_validate_and_get_data")
 def step_1_validate_and_get_data(state: QueryGraphState):
     # 1. 获取数据
     item_names: list[str] = state.get("item_names", [])
+    doc_filters: dict = state.get("doc_filters") or {}
     rewritten_query: str = state.get("rewritten_query")
 
-    # 2. 参数校验：rewritten_query 必须存在；item_names 允许为空（知识/概念类查询走全库检索）
+    # 2. 参数校验：rewritten_query 必须存在；item_names 允许为空
+    #    （无主体时可按 doc_filters 收窄到某份资料，或走全库检索）
     if not rewritten_query:
         logger.error(f"rewritten_query为空,业务无法继续,提前终止!")
         raise ValueError(f"rewritten_query为空,业务无法继续,提前终止!")
-    if not item_names:
-        logger.info("item_names为空,按知识/概念类问题进行无主体过滤的全库检索")
-    return item_names, rewritten_query
+    if not item_names and not doc_filters:
+        logger.info("item_names与doc_filters均为空,按知识/概念类问题进行无过滤的全库检索")
+    return item_names, doc_filters, rewritten_query
 
 
-@step_log("step_2_select_chunks_in_milvus")
-def step_2_select_chunks_in_milvus(item_names: list[str], rewritten_query: str) -> list[dict]:
-    # 1、问题向量化，获取稀疏、稠密向量
-    result = generate_embeddings([rewritten_query])
-    dense_vector = result.get('dense')[0]
-    sparse_vector = result.get('sparse')[0]
-
-    # 2、构建过滤条件：有主体则按 item_name 过滤，无主体则不加过滤（全库检索）
-    expr: str | None = None
+@step_log("step_2_build_filter_expr")
+def step_2_build_filter_expr(item_names: list[str], doc_filters: dict) -> tuple[str | None, str]:
+    """
+    构造 Milvus 过滤表达式，优先级：主体 > 资料名(file_title) > 不附加过滤。
+    互斥不叠加，避免多条件同时生效把召回打成空。
+    :return: (表达式或None, 供日志展示的条件描述)
+    """
     if item_names:
-        item_names_str = ','.join(f'\"{item_name}\"' for item_name in item_names)
-        expr = f'item_name in [{item_names_str}]'
+        names = ','.join(f'"{name}"' for name in item_names)
+        return f'item_name in [{names}]', f'item_name in {item_names}'
+    file_titles = [str(title).replace('"', '') for title in (doc_filters.get('file_titles') or [])]
+    if file_titles:
+        titles = ','.join(f'"{title}"' for title in file_titles)
+        return f'file_title in [{titles}]', f'file_title in {file_titles}'
+    return None, '不附加过滤(全库检索)'
 
-    # 3、构建混合检索 AnnSearchRequest
+
+def _search_chunks_with_expr(dense_vector, sparse_vector, expr: str | None) -> list[dict]:
+    """用指定过滤条件跑一次混合检索，返回原始结果列表。"""
     search_requests = create_hybrid_search_requests(
         dense_vector=dense_vector,
         sparse_vector=sparse_vector,
         expr=expr,
         limit=5
     )
-
-    # 4、混合检索
-    client = milvus_utils.get_milvus_client()
-    collection_name = milvus_config.chunks_collection
-
     response = hybrid_search(
-        client=client,
-        collection_name=collection_name,
+        client=milvus_utils.get_milvus_client(),
+        collection_name=milvus_config.chunks_collection,
         reqs=search_requests,
         ranker_weights=(0.5, 0.5),
         norm_score=True,
@@ -68,8 +74,31 @@ def step_2_select_chunks_in_milvus(item_names: list[str], rewritten_query: str) 
     return response[0]
 
 
-@step_log("step_3_after_deal_milvus")
-def step_3_after_deal_milvus_result(real_response: list[dict]):
+@step_log("step_3_select_chunks_in_milvus")
+def step_3_select_chunks_in_milvus(item_names: list[str], doc_filters: dict, rewritten_query: str) -> list[dict]:
+    # 1、问题向量化，获取稀疏、稠密向量（只算一次，重试时不重复编码）
+    result = generate_embeddings([rewritten_query])
+    dense_vector = result.get('dense')[0]
+    sparse_vector = result.get('sparse')[0]
+
+    # 2、构造过滤条件
+    expr, filter_desc = step_2_build_filter_expr(item_names, doc_filters)
+
+    # 3、混合检索
+    chunks = _search_chunks_with_expr(dense_vector, sparse_vector, expr)
+
+    # 4、过滤过狠导致召回不足时，去掉过滤改为全库检索重试一次
+    if expr and len(chunks) < RETRIEVAL_MIN_HITS:
+        logger.warning(f"过滤条件[{filter_desc}]下仅召回{len(chunks)}条(少于{RETRIEVAL_MIN_HITS}条),"
+                       f"去掉过滤改为全库检索重试")
+        chunks = _search_chunks_with_expr(dense_vector, sparse_vector, None)
+    else:
+        logger.info(f"向量内容检索完成,过滤条件:{filter_desc},召回{len(chunks)}条")
+    return chunks
+
+
+@step_log("step_4_after_deal_milvus")
+def step_4_after_deal_milvus_result(real_response: list[dict]):
     """
     milvus 原始结果扁平化
     :param real_response:
@@ -93,13 +122,13 @@ def node_search_embedding(state: QueryGraphState):
     """
     logger.info("---向量内容检索 开始处理---")
     add_running_task(state["session_id"], sys._getframe().f_code.co_name, state.get("is_stream"))
-    # 1、参数校验，返回item_name、rewritten_query
-    item_names, rewritten_query = step_1_validate_and_get_data(state)
-    # 2、向量数据库进行混合检索
-    real_response: list[dict] = step_2_select_chunks_in_milvus(item_names, rewritten_query)
+    # 1、参数校验，返回 item_names、doc_filters、rewritten_query
+    item_names, doc_filters, rewritten_query = step_1_validate_and_get_data(state)
+    # 2、向量数据库进行混合检索（含过滤优先级与空召回回退）
+    real_response: list[dict] = step_3_select_chunks_in_milvus(item_names, doc_filters, rewritten_query)
 
     # 3、查询结果扁平化
-    flat_chunks = step_3_after_deal_milvus_result(real_response)
+    flat_chunks = step_4_after_deal_milvus_result(real_response)
 
     add_done_task(state["session_id"], sys._getframe().f_code.co_name, state.get("is_stream"))
 

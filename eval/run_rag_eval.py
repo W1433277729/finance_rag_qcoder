@@ -22,8 +22,8 @@ from src.processor.query_processor.main_graph import query_app
 from src.processor.query_processor.state import create_query_default_state
 
 from eval.config import (
-    DATASET_PATH, DEFAULT_METRICS, FALLBACK_MARKERS, JUDGE_CONCURRENCY,
-    JUDGE_MODEL, REPORT_DIR, SLOW_QUERY_SECONDS,
+    CLARIFY_MARKERS, CLARIFY_MAX_LEN, DATASET_PATH, DEFAULT_METRICS, FALLBACK_MARKERS,
+    JUDGE_CONCURRENCY, JUDGE_MODEL, REPORT_DIR, SLOW_QUERY_SECONDS,
 )
 from eval.judge import build_metrics
 from eval.report import build_report
@@ -181,13 +181,18 @@ def classify_branch(final_state: dict) -> str:
 # must_not 命中时的否定词：出现即视为「否定式表述」，不算违规
 # （例如 must_not 含「保本」时，答案里的「不保本」「非保本浮动收益型」是正确表述，不应判违规）
 _NEGATION_CHARS = ('不', '非', '无', '未', '没', '免')
-_NEGATION_WINDOW = 3
+# 否定语义可能出现在命中词之前更远的位置，例如「但并不意味着亏损概率几乎为零」
+_NEGATION_WINDOW = 8
+# 引号：命中词被引号包裹时视为「提及/引用」（如反驳用户说法），不算违规
+_QUOTE_CHARS = ('"', '“', '”', "'", '「', '」', '『', '』')
 
 
 def keyword_violated(answer: str, keyword: str) -> bool:
     """
-    判定答案是否**实质违反** must_not 关键词：命中关键词时再看它前面几个字符，
-    若紧邻否定词则视为否定式表述（如「不保本」），不计违规。
+    判定答案是否**实质违反** must_not 关键词：
+    1) 命中关键词后，看它前面若干字符是否有否定词（「不保本」「并不意味着几乎为零」）→ 否定式，不计违规；
+    2) 命中词被引号包裹 → 属于「提及/引用」（如反驳用户说法），不计违规。
+    更细的语义判断以合规 rubric 的 LLM 评分为准。
     """
     normalized_answer = normalize_for_match(answer)
     normalized_keyword = normalize_for_match(keyword)
@@ -199,7 +204,12 @@ def keyword_violated(answer: str, keyword: str) -> bool:
         if index < 0:
             return False
         prefix = normalized_answer[max(0, index - _NEGATION_WINDOW):index]
-        if not any(char in prefix for char in _NEGATION_CHARS):
+        negated = any(char in prefix for char in _NEGATION_CHARS)
+        # 引号判断必须在同一份（归一化后的）文本上取前后字符，否则索引会与原文错位
+        before = normalized_answer[max(0, index - 1):index] if index else ''
+        after = normalized_answer[index + len(normalized_keyword):index + len(normalized_keyword) + 1]
+        quoted = before in _QUOTE_CHARS and after in _QUOTE_CHARS
+        if not negated and not quoted:
             return True
         start = index + len(normalized_keyword)
 
@@ -217,6 +227,17 @@ def is_overall_fallback(answer: str) -> bool:
     return False
 
 
+def is_clarify(answer: str) -> bool:
+    """
+    判定答案是否是「反问澄清」而非正式作答：命中反问话术且答案很短。
+    对应场景②（主体候选不确定）与场景④（指代不明/未指定对象）。
+    """
+    text = (answer or '').strip()
+    if not text or len(text) > CLARIFY_MAX_LEN:
+        return False
+    return any(marker in text for marker in CLARIFY_MARKERS)
+
+
 def evaluate_rules(question: dict, final_state: dict, docs: list[dict], refs: list[dict]) -> dict:
     """确定性断言：不花 LLM 成本，先看合规护栏与来源回传是否真的生效。"""
     answer = final_state.get('answer') or ''
@@ -232,6 +253,10 @@ def evaluate_rules(question: dict, final_state: dict, docs: list[dict], refs: li
         'fallback_hit': hit_fallback,
         'fallback_expected': bool(question.get('expect_fallback')),
         'fallback_ok': hit_fallback == bool(question.get('expect_fallback')),
+        # 反问澄清（场景②消歧 / 场景④指代不明）
+        'clarify_hit': is_clarify(answer),
+        'clarify_expected': bool(question.get('expect_clarify')),
+        'clarify_ok': is_clarify(answer) == bool(question.get('expect_clarify')),
         'references_count': len(refs),
         'references_non_empty': len(refs) > 0,
         'references_cover_gold': any(file_stem(r.get('source_file')) in gold for r in refs) if gold else None,

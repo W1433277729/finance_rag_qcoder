@@ -71,5 +71,8 @@ OPTIONAL_METRICS = [
 FALLBACK_MARKER = '未检索到足够信息'
 # 兜底判定：命中任一标记即认为走了兜底
 FALLBACK_MARKERS = [FALLBACK_MARKER, '暂无相关', '没有相关', '未收录']
+# 反问澄清话术的识别标记（场景②主体消歧 / 场景④指代不明），配合长度上限判断
+CLARIFY_MARKERS = ['您想查询的是', '您指的是', '请明确']
+CLARIFY_MAX_LEN = 400
 # 答题耗时告警阈值（秒）
 SLOW_QUERY_SECONDS = 60.0

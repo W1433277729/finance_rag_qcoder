@@ -4,6 +4,7 @@
     @Author :爱吃肯德基
 """
 import math
+import re
 import sys
 import time
 from typing import Any
@@ -210,15 +211,18 @@ def step_4_select_item_names_milvus(item_names: list[str]):
     return milvus_search_result
 
 
-def _literal_overlap(probe: str, text: str) -> bool:
+def _literal_overlap(probe: str, text: str, threshold: float | None = None) -> bool:
     """
-    判断 probe 的字符有多大比例出现在 text 中（默认阈值 0.5），用于两道护栏：
+    判断 probe 的字符有多大比例出现在 text 中（默认阈值 0.5），用于三道护栏：
     1) 反问护栏：候选主体是否与模型提取的主体字面相关（probe=提取名，text=候选）
     2) 主体护栏：匹配到的主体是否真的出现在用户问题/历史里（probe=主体，text=问题+历史）
+    3) 资料线索匹配：线索是否指向某份真实资料（probe=线索，text=资料名，阈值更严见 DOC_HINT_LITERAL_OVERLAP）
     优先按中文汉字比对（避免数字/字母造成虚假重合，如「第17期」与「07期」共享 0/7/期），
     双方都无中文时退化为非空白字符比对。
     :return: True 表示字面相关；False 表示无关（大概率是模型臆测）
     """
+    threshold = ITEM_NAME_OPTION_LITERAL_OVERLAP if threshold is None else threshold
+
     def char_set(value: str, cjk_only: bool) -> set[str]:
         value = str(value or '')
         if cjk_only:
@@ -230,7 +234,107 @@ def _literal_overlap(probe: str, text: str) -> bool:
         else (char_set(probe, False), char_set(text, False))
     if not probe_chars or not text_chars:
         return False
-    return len(probe_chars & text_chars) / len(probe_chars) >= ITEM_NAME_OPTION_LITERAL_OVERLAP
+    return len(probe_chars & text_chars) / len(probe_chars) >= threshold
+
+
+# 知识库资料清单进程内缓存：反问候选与资料线索匹配都用它
+_KB_FILE_TITLES_CACHE: list[str] | None = None
+
+# 反问澄清时最多列出几个候选
+CLARIFY_TITLE_PREVIEW = 8
+
+# 单条资料线索最多可匹配几份资料：超过说明线索太泛（如"报告""风险"），不用作过滤条件
+DOC_HINT_MAX_MATCHES = 4
+# 资料线索与资料名的字面重合阈值：比主体匹配更严 —— 短线索容易靠"公""报"这类常见字蒙中 0.5 的线
+DOC_HINT_LITERAL_OVERLAP = 0.75
+
+# 指向不明判定的**确定性**规则（不依赖 LLM 自评，避免误反问）：
+# ① 指示代词必须**带着"产品/资料"这类对象名词**才算指向不明：
+#    这样「这个产品」「这份公告」会反问，而「这个指标是什么意思」（指代对象就在本句内，如"夏普比率"）
+#    「它跟踪得紧不紧」（对象已在句中）不会误反问
+CLARIFY_PRONOUN_RE = re.compile(
+    r'(这个|这份|这只|这几个|这几份|该)(产品|基金|理财|报告|公告|文件|资料|说明书|揭示书|年报|季报|概要|机构|公司|银行)'
+    r'|上述|本文'
+)
+# ② 「某 + 名词」：指"某一具体但未指明的对象"
+CLARIFY_INDEFINITE_RE = re.compile(r'某(一)?(公司|机构|行业|政策文件|产品|基金|银行|报告|公告|理财)')
+
+
+def _need_clarify(original_query: str, item_names: list[str]) -> bool:
+    """
+    是否需要先反问用户澄清：问题指向某个具体对象、但没说清是哪一个。
+    规则（对应用户确认的策略 A"有代词就反问"）：
+      1) 模型已抽出具体主体 → 对象明确，不反问；
+      2) 问题里出现「指示代词 + 对象名词」（这个产品/这份公告/该基金…），或「上述/本文」；
+      3) 问题用「某 + 名词」指代未指定对象。
+    """
+    if item_names:
+        return False
+    text = original_query or ''
+    if CLARIFY_PRONOUN_RE.search(text):
+        return True
+    return bool(CLARIFY_INDEFINITE_RE.search(text))
+
+
+def _load_kb_file_titles() -> list[str]:
+    """加载知识库实际入库的资料名（file_title）清单，进程内只查一次。"""
+    global _KB_FILE_TITLES_CACHE
+    if _KB_FILE_TITLES_CACHE is not None:
+        return _KB_FILE_TITLES_CACHE
+    titles: list[str] = []
+    try:
+        client = get_milvus_client()
+        if client is not None:
+            collection = milvus_config.chunks_collection
+            client.load_collection(collection_name=collection)
+            rows = client.query(collection_name=collection, filter='chunk_id >= 0',
+                                output_fields=['file_title'], limit=16384)
+            titles = sorted({row.get('file_title') for row in rows if row.get('file_title')})
+    except Exception as e:
+        logger.warning(f"读取知识库资料清单失败,本次跳过资料过滤与候选列举:{str(e)}")
+    _KB_FILE_TITLES_CACHE = titles
+    logger.info(f"知识库资料清单加载完成,共{len(titles)}份")
+    return titles
+
+
+def _match_doc_filters(file_hints: list[str], context_text: str) -> dict:
+    """
+    把模型抽取的「资料线索」匹配成真实 file_title 白名单（需求 §11.4：泛指某份资料的问题）。
+    两道护栏：① 线索必须能在用户问题/历史里字面找到依据（防模型臆测）；② 必须能匹配到知识库中的资料。
+    :return: {"file_titles": [...]}；无有效线索时返回空字典（退回全库检索）
+    """
+    titles = _load_kb_file_titles()
+    if not titles:
+        return {}
+    matched: list[str] = []
+    for hint in (file_hints or []):
+        hint = str(hint or '').strip()
+        if not hint:
+            continue
+        if not _literal_overlap(hint, context_text):
+            logger.info(f"资料线索[{hint}]未在问题/历史中出现,判定为模型臆测并丢弃")
+            continue
+        hit_titles = [title for title in titles
+                      if hint in title or _literal_overlap(hint, title, DOC_HINT_LITERAL_OVERLAP)]
+        if len(hit_titles) > DOC_HINT_MAX_MATCHES:
+            logger.info(f"资料线索[{hint}]过于宽泛(命中{len(hit_titles)}份资料),不用于收窄检索")
+            continue
+        for title in hit_titles:
+            if title not in matched:
+                matched.append(title)
+    if matched:
+        logger.info(f"资料线索命中知识库资料:{matched}")
+        return {"file_titles": matched}
+    return {}
+
+
+def _build_clarify_answer() -> str:
+    """指向不明（含指代词或未指定对象且历史无法消解）时的反问话术，附带知识库可选资料。"""
+    titles = _load_kb_file_titles()
+    preview = '、'.join(f'《{title}》' for title in titles[:CLARIFY_TITLE_PREVIEW])
+    suffix = '等' if len(titles) > CLARIFY_TITLE_PREVIEW else ''
+    return (f"您想了解的是哪一份资料或哪一个产品？请明确具体名称后我再为您查询。\n"
+            f"当前知识库中包含：{preview}{suffix}。")
 
 
 @step_log("step_5_select_confirmed_and_option_item_names")
@@ -271,14 +375,14 @@ def step_5_select_confirmed_and_option_item_names(search_result: dict[str, list[
 
 @step_log("step_6_change_state_property")
 def step_6_change_state_property(state: QueryGraphState, rewritten_query, confirmed_option_dict,
-                                 history_text: str = ""):
+                                 history_text: str = "", file_hints: list[str] | None = None):
     """
     更新state
       场景1: 有可信主体 -> item_names + rewritten_query,继续检索(不写answer)
       场景2: 无可信但有可选主体 -> 写answer反问用户澄清
-      场景3: 无可信也无可选(知识/概念类问题,或产品未匹配) -> item_names置空,
-             仅保留rewritten_query,走「无主体过滤」的全库检索(不写answer)
-    :param history_text: 历史对话文本，用于校验主体是否真的在上下文里出现过
+      场景3: 无可信也无可选 -> item_names置空,走全库检索;若能匹配到资料线索则按资料收窄(需求 §11.4)
+    :param history_text: 历史对话文本，用于校验主体/资料线索是否真的在上下文里出现过
+    :param file_hints: 模型抽取的资料线索（如"货币政策执行报告"）
     :return:
     """
     confirmed_list = confirmed_option_dict.get("confirmed", [])
@@ -310,9 +414,14 @@ def step_6_change_state_property(state: QueryGraphState, rewritten_query, confir
         logger.info(f"存在多个候选主体:{option_list},已写入反问answer!")
         return
 
-    # 场景3: 无可信也无可选 -> 知识/概念类或未匹配查询,走无过滤全库检索
+    # 场景3: 无可信也无可选 -> 知识/概念类或未匹配查询,走无主体过滤的检索
+    # 若问题点名了某份资料（需求 §11.4 公告资讯类），则按 file_title 收窄检索范围
     state['item_names'] = []
-    logger.info("未确认到具体金融产品主体,按知识/概念类问题继续走全库检索!")
+    state['doc_filters'] = _match_doc_filters(file_hints or [], context_text)
+    if state['doc_filters']:
+        logger.info(f"未确认到主体,但匹配到资料线索,按资料收窄检索:{state['doc_filters']}")
+    else:
+        logger.info("未确认到具体金融产品主体,按知识/概念类问题继续走全库检索!")
 
 
 
@@ -343,6 +452,24 @@ def node_item_name_confirm(state: QueryGraphState):
     history_list: list[dict] = step_2_get_history_by_session_id(session_id)
     # 3. 调用模型进行问题重写和item_name提取
     llm_dict: dict[str, Any] = step_3_call_llm_rewritten_and_extract_itemnames(history_list, original_query)
+    # history_text 用于校验主体/资料线索是否真的在上下文出现过（多轮追问时对象可能只在历史里）
+    history_text = ' '.join(
+        f"{item.get('text', '')} {item.get('rewritten_query', '')}" for item in history_list
+    )
+
+    # 3b. 指向不明（含指示代词 / 「某X」未指定对象）→ 先反问用户澄清，不进入检索。
+    #     判定用确定性规则 _need_clarify（不依赖 LLM 的 needs_clarification 自评：
+    #     实测它会把"什么是最大回撤""老百姓收入水平"这类通用问题误标为需澄清）。
+    if _need_clarify(original_query, llm_dict.get("item_names") or []):
+        logger.info(f"问题指向不明(含指示代词或未指定对象),先反问澄清;改写问题:{llm_dict.get('rewritten_query')}")
+        state['rewritten_query'] = llm_dict.get("rewritten_query") or original_query
+        state['item_names'] = []
+        state['doc_filters'] = {}
+        state['answer'] = _build_clarify_answer()
+        step_7_save_user_chat_message(state)
+        add_done_task(state["session_id"], sys._getframe().f_code.co_name, state["is_stream"])
+        return state
+
     confirmed_option_dict = {}
     if llm_dict.get("item_names"):
         # 4. 根据模型提取的item_name进行向量数据库的检索 [混合检索]
@@ -356,11 +483,8 @@ def node_item_name_confirm(state: QueryGraphState):
         confirmed_option_dict: dict[str, list[str]] = step_5_select_confirmed_and_option_item_names(search_result)
     # 6. 根据确认和可选列表存在性修改state
     # state -> item_names 可信确定 rewritten_query || 可选 answer || 没有可选  answer
-    # history_text 用于校验主体是否真的在上下文出现过（多轮追问时主体可能只在历史里）
-    history_text = ' '.join(
-        f"{item.get('text', '')} {item.get('rewritten_query', '')}" for item in history_list
-    )
-    step_6_change_state_property(state, llm_dict.get("rewritten_query"), confirmed_option_dict, history_text)
+    step_6_change_state_property(state, llm_dict.get("rewritten_query"), confirmed_option_dict, history_text,
+                                 llm_dict.get("file_hints"))
     # #  7. 写入历史聊天记录(用户提问)
     step_7_save_user_chat_message(state)
 

@@ -97,14 +97,21 @@ def validate(questions: list[dict], valid_titles: set[str]) -> list[str]:
         if q.get('expect_fallback') and golds:
             issues.append(f'WARN  {qid}: expect_fallback=true 却填了 gold_sources {golds}')
 
+        if q.get('expect_clarify') and q.get('expect_fallback'):
+            issues.append(f'ERROR {qid}: expect_clarify 与 expect_fallback 不能同时为 true')
+        if q.get('expect_clarify') and golds:
+            issues.append(f'WARN  {qid}: expect_clarify=true 却填了 gold_sources {golds}')
+
         overlap = set(q.get('must_have') or []) & set(q.get('must_not') or [])
         if overlap:
             issues.append(f'ERROR {qid}: must_have 与 must_not 冲突 {sorted(overlap)}')
 
-        if not q.get('evidence'):
-            issues.append(f'WARN  {qid}: evidence 为空，人工无法核对答案依据')
-        if len(q.get('ground_truth') or '') < 10:
-            issues.append(f'WARN  {qid}: ground_truth 过短（{len(q.get("ground_truth") or "")} 字）')
+        # 反问题没有语料依据，跳过 evidence / ground_truth 长度校验
+        if not q.get('expect_clarify'):
+            if not q.get('evidence'):
+                issues.append(f'WARN  {qid}: evidence 为空，人工无法核对答案依据')
+            if len(q.get('ground_truth') or '') < 10:
+                issues.append(f'WARN  {qid}: ground_truth 过短（{len(q.get("ground_truth") or "")} 字）')
     return issues
 
 
@@ -141,6 +148,8 @@ def write_review_md(questions: list[dict]) -> Path:
         flags = []
         if q.get('expect_fallback'):
             flags.append('无资料题（应走兜底）')
+        if q.get('expect_clarify'):
+            flags.append('反问题（应先澄清再答）')
         if q.get('expect_compliance'):
             flags.append('合规诱导题')
         lines.append(f"### {q['id']}　{'　'.join(f'`{f}`' for f in flags)}")
@@ -153,7 +162,8 @@ def write_review_md(questions: list[dict]) -> Path:
         lines.append(f"- **应出现关键词**：{'、'.join(q['must_have']) or '—'}")
         lines.append(f"- **违规词**：{'、'.join(q['must_not']) or '—'}")
         lines.append(f"- **出题意图**：{q.get('design_note', '')}")
-        lines.append(f"- **语料依据**：{q.get('evidence', '')}")
+        if q.get('evidence'):
+            lines.append(f"- **语料依据**：{q['evidence']}")
         lines.append('')
     out.write_text('\n'.join(lines), encoding='utf-8')
     return out

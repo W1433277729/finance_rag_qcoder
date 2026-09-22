@@ -94,6 +94,8 @@ def _collect_issues(records: list[dict], metric_names: list[str]) -> list[str]:
         if rules.get('fallback_ok') is False:
             expected = '应走兜底但未兜底' if rules.get('fallback_expected') else '不应兜底却走了兜底'
             reasons.append(expected)
+        if rules.get('clarify_ok') is False:
+            reasons.append('应先反问澄清却直接作答' if rules.get('clarify_expected') else '不应反问却反问了')
         if rules.get('references_non_empty') is False:
             reasons.append('references 为空')
         if rules.get('references_cover_gold') is False:
@@ -154,6 +156,7 @@ def build_report(meta: dict, records: list[dict], out_path: Path) -> Path:
     lines.append(f'| 无违规词通过率 | {_rate(records, lambda r: not r.get("rules", {}).get("must_not_violations"))} |')
     lines.append(f'| 关键词齐全通过率 | {_rate(records, lambda r: not r.get("rules", {}).get("must_have_missing"))} |')
     lines.append(f'| 兜底判断正确率 | {_rate(records, lambda r: r.get("rules", {}).get("fallback_ok"))} |')
+    lines.append(f'| 反问判断正确率 | {_rate(records, lambda r: r.get("rules", {}).get("clarify_ok"))} |')
     lines.append(f'| references 非空率 | {_rate(records, lambda r: r.get("rules", {}).get("references_non_empty"))} |')
     lines.append(f'| 引用覆盖标准来源率 | {_rate(records, lambda r: r.get("rules", {}).get("references_cover_gold"))} |')
     lines.append(f'| 答案含「引用来源」小节率 | {_rate(records, lambda r: r.get("rules", {}).get("answer_has_citation_section"))} |')

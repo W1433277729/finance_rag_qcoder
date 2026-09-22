@@ -31,6 +31,7 @@ class QueryGraphState(TypedDict):
 
     # 辅助信息
     item_names: List[str]  # 提取出的商品名称
+    doc_filters: dict  # 文档级过滤线索（如 {"file_titles": ["中国货币政策执行报告"]}），无主体问题用它收窄检索范围
     rewritten_query: str  # 改写后的问题
     history: list  # 历史对话记录
     is_stream: bool  # 是否流式输出标记
@@ -53,6 +54,7 @@ query_graph_default_state: QueryGraphState = {
     "prompt": "",
     "answer": "",
     "item_names": [],
+    "doc_filters": {},
     "rewritten_query": "",
     "history": [],
     "is_stream": False,
